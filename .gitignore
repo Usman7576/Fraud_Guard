@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Data and artefacts (snapshots are rebuilt by `fraudguard all`; MLflow logs each manifest digest)
+data/raw/*
+!data/raw/.gitkeep
+data/snapshots/
+mlruns/
+mlartifacts/
+reports/**/*.html
+
+# Environment
+.env
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

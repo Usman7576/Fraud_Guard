@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+import polars as pl
+from typer.testing import CliRunner
+
+from fraudguard.cli import app
+from fraudguard.config import DataConfig
+from fraudguard.data import pipeline, snapshot
+from fraudguard.data.split import SPLIT
+
+
+def test_build_writes_snapshot_then_skips(data_config: DataConfig) -> None:
+    first = pipeline.build_base(data_config)
+    assert not first.skipped
+    df = snapshot.load_snapshot(data_config.paths.snapshot_dir, pipeline.STAGE, "transactions")
+    assert {"ts", "day", "card_uid", SPLIT, "has_identity"} <= set(df.columns)
+    assert df["TransactionDT"].is_sorted()
+    assert df.schema["V1"] == pl.Float32  # downcast applied
+    assert df.schema["TransactionAmt"] == pl.Float64  # amount keeps full precision
+
+    second = pipeline.build_base(data_config)
+    assert second.skipped
+    assert second.manifest.digest() == first.manifest.digest()
+
+
+def test_build_reruns_when_config_changes(data_config: DataConfig) -> None:
+    pipeline.build_base(data_config)
+    changed = data_config.model_copy(update={"label_delay_days": 45})
+    assert not pipeline.build_base(changed).skipped
+
+
+def test_cli_build_and_info(data_config: DataConfig, tmp_path: object) -> None:
+    cfg_path = data_config.paths.raw_dir.parent / "data.yaml"
+    runner = CliRunner()
+    result = runner.invoke(app, ["data", "build", "--config", str(cfg_path)])
+    assert result.exit_code == 0, result.output
+    assert "validation" in result.output
+    info = runner.invoke(app, ["data", "info", "--config", str(cfg_path)])
+    assert info.exit_code == 0, info.output
+    assert "transactions" in info.output
