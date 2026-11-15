@@ -10,7 +10,13 @@ from rich.console import Console
 from rich.table import Table
 
 from fraudguard import __version__
-from fraudguard.config import PROJECT_ROOT, get_settings, load_data_config, load_feature_config
+from fraudguard.config import (
+    PROJECT_ROOT,
+    get_settings,
+    load_data_config,
+    load_feature_config,
+    load_model_config,
+)
 from fraudguard.data import pipeline, synthetic
 from fraudguard.data.snapshot import SnapshotError, load_snapshot, read_manifest
 from fraudguard.features import pipeline as feature_pipeline
@@ -22,9 +28,11 @@ app = typer.Typer(help="FraudGuard: cost-aware fraud detection.", no_args_is_hel
 data_app = typer.Typer(help="Data foundation: raw files to versioned snapshots.", no_args_is_help=True)
 features_app = typer.Typer(help="Feature engineering.", no_args_is_help=True)
 report_app = typer.Typer(help="Analysis reports.", no_args_is_help=True)
+train_app = typer.Typer(help="Model training (tracked in MLflow).", no_args_is_help=True)
 app.add_typer(data_app, name="data")
 app.add_typer(features_app, name="features")
 app.add_typer(report_app, name="report")
+app.add_typer(train_app, name="train")
 console = Console()
 
 ConfigOpt = Annotated[Path | None, typer.Option("--config", help="Path to a data config YAML.")]
@@ -117,6 +125,46 @@ def run_all(
     data_build(force=force, config=config)
     features_build(force=force, config=config, features_config=None)
     report_adversarial(config=config, features_config=None, out=PROJECT_ROOT / "reports")
+    train_baselines(config=config, model_config=None, out=PROJECT_ROOT / "reports")
+
+
+@train_app.command("baselines")
+def train_baselines(
+    config: ConfigOpt = None,
+    model_config: Annotated[
+        Path | None, typer.Option("--model-config", help="Path to a model config YAML.")
+    ] = None,
+    out: OutOpt = PROJECT_ROOT / "reports",
+) -> None:
+    """Fit the rules baseline and logistic regression; compare them on the validation month."""
+    # MLflow takes seconds to import; load it only for commands that train.
+    from fraudguard.models import baselines  # noqa: PLC0415
+
+    data_cfg, model_cfg = load_data_config(config), load_model_config(model_config)
+    try:
+        report = baselines.run_baselines(data_cfg, model_cfg, get_settings())
+    except SnapshotError as exc:
+        console.print(f"[red]{exc}[/] Run `fraudguard features build` first.")
+        raise typer.Exit(1) from exc
+
+    fpr = model_cfg.evaluation.target_fpr
+    table = Table(title="Validation month", header_style="bold")
+    for col in ("model", "PR-AUC", "ROC-AUC", f"recall @ {fpr:.0%} FPR", "precision there", "Brier"):
+        table.add_column(col, justify="left" if col == "model" else "right")
+    for r in report.results:
+        v = r.validation
+        brier = f"{v.brier:.4f}" if v.brier is not None else "-"
+        table.add_row(
+            r.name,
+            f"{v.pr_auc:.4f}",
+            f"{v.roc_auc:.4f}",
+            f"{v.recall_at_fpr:.1%}",
+            f"{v.precision_at_fpr:.1%}",
+            brier,
+        )
+    console.print(table)
+    path = baselines.write_report(report, out)
+    console.print(f"Runs logged to MLflow ({get_settings().mlflow_experiment}); report at {path}")
 
 
 @features_app.command("build")

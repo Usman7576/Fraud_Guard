@@ -36,7 +36,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _git_commit() -> str:
+def git_commit() -> str:
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True, timeout=5
@@ -99,7 +99,7 @@ def write_snapshot(
     manifest = Manifest(
         stage=stage,
         created_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        code_version=f"{__version__}+{_git_commit()}",
+        code_version=f"{__version__}+{git_commit()}",
         config_fingerprint=config_fingerprint,
         inputs=dict(sorted(inputs.items())),
     )

@@ -11,7 +11,7 @@ from fraudguard.config import FeatureConfig
 from fraudguard.data.identity import UID
 from fraudguard.data.schema import DT, ID, LABEL
 from fraudguard.data.split import SPLIT
-from fraudguard.features import base, behaviour, velocity
+from fraudguard.features import base, behaviour, graph, velocity
 
 BuildFn = Callable[[pl.DataFrame, FeatureConfig], pl.DataFrame]
 
@@ -32,6 +32,7 @@ GROUPS: dict[str, FeatureGroup] = {
         FeatureGroup("base", base.build, "Raw columns plus per-row derivations"),
         FeatureGroup("velocity", velocity.build, "Counts and amounts per entity over 1h / 24h / 7d"),
         FeatureGroup("behaviour", behaviour.build, "How unusual this transaction is for this card"),
+        FeatureGroup("graph", graph.build, "Shared devices and addresses; known fraud within two hops"),
     )
 }
 

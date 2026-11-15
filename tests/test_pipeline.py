@@ -25,7 +25,7 @@ def test_build_writes_snapshot_then_skips(data_config: DataConfig) -> None:
 
 def test_build_reruns_when_config_changes(data_config: DataConfig) -> None:
     pipeline.build_base(data_config)
-    changed = data_config.model_copy(update={"label_delay_days": 45})
+    changed = data_config.model_copy(update={"seed": 123})
     assert not pipeline.build_base(changed).skipped
 
 

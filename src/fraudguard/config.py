@@ -7,7 +7,7 @@ import json
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_db: str = "fraudguard"
     log_level: str = "INFO"
+    mlflow_tracking_uri: str = f"sqlite:///{(PROJECT_ROOT / 'mlflow.db').as_posix()}"
+    mlflow_experiment: str = "fraudguard"
 
 
 class Paths(BaseModel):
@@ -61,7 +63,6 @@ class DataConfig(BaseModel):
     raw_files: RawFiles
     reference_date: date
     split: SplitConfig
-    label_delay_days: int = Field(ge=0)
 
     def fingerprint(self) -> str:
         """Stable hash of the config, recorded in snapshot manifests."""
@@ -76,16 +77,59 @@ class AdversarialConfig(BaseModel):
     top_k: int = Field(default=15, ge=1)
 
 
+class GraphConfig(BaseModel):
+    label_delay_days: int = Field(default=30, ge=0)
+    hop_entities: list[Literal["device", "address", "email"]] = Field(default=["device", "address"])
+    max_neighbours: int = Field(default=200, ge=1)
+    entity_window_days: int = Field(default=30, ge=1)
+
+
 class FeatureConfig(BaseModel):
     velocity_windows: list[str] = Field(min_length=1)
     velocity_keys: dict[str, str] = Field(min_length=1)
     history_window: str
     min_history_for_zscore: int = Field(default=2, ge=2)
+    graph: GraphConfig = GraphConfig()
     adversarial: AdversarialConfig = AdversarialConfig()
 
     def fingerprint(self) -> str:
         payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+class RuleConfig(BaseModel):
+    name: str
+    feature: str
+    op: Literal[">", ">=", "<", "<=", "=="]
+    value: float
+    weight: float = Field(default=1.0, gt=0)
+
+
+class LogisticConfig(BaseModel):
+    C: float = Field(default=0.1, gt=0)
+    max_iter: int = Field(default=2000, ge=100)
+    min_category_share: float = Field(default=0.001, gt=0, lt=1)
+    categorical: list[str] = Field(default_factory=list)
+    exclude_prefixes: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+
+
+class EvaluationConfig(BaseModel):
+    target_fpr: float = Field(default=0.01, gt=0, lt=1)
+
+
+class ModelConfig(BaseModel):
+    evaluation: EvaluationConfig = EvaluationConfig()
+    rules: list[RuleConfig] = Field(min_length=1)
+    logistic: LogisticConfig = LogisticConfig()
+
+    def fingerprint(self) -> str:
+        payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)
+        return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def load_model_config(path: Path | None = None) -> ModelConfig:
+    return ModelConfig.model_validate(_read_yaml(path or CONFIG_DIR / "model.yaml"))
 
 
 def load_feature_config(path: Path | None = None) -> FeatureConfig:

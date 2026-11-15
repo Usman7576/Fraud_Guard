@@ -17,6 +17,7 @@ data/raw/*
 !data/raw/.gitkeep
 data/snapshots/
 mlruns/
+mlflow.db
 mlartifacts/
 # Generated reports stay local until they come from the real dataset.
 /reports/

@@ -1,0 +1,51 @@
+# Model configuration. Models are fitted on the train split and compared on
+# the validation split; the test split stays untouched until final evaluation.
+
+evaluation:
+  # Recall is reported at this false-positive rate (1% of genuine flagged).
+  target_fpr: 0.01
+
+# Hand-written rules a fraud team might start with: amount limits, velocity
+# limits and blacklists. Score = sum of weights of the rules that fire.
+rules:
+  - name: high_amount
+    feature: TransactionAmt
+    op: ">"
+    value: 1000
+    weight: 1.0
+  - name: card_burst_1h
+    feature: vel_card_1h_cnt
+    op: ">="
+    value: 3
+    weight: 1.0
+  - name: card_burst_24h
+    feature: vel_card_24h_cnt
+    op: ">="
+    value: 10
+    weight: 1.0
+  - name: new_card_high_amount
+    feature: card_amt_new_high   # derived: new card and amount > 300
+    op: ">="
+    value: 1
+    weight: 1.0
+  - name: card_blacklisted
+    feature: graph_card_known_fraud
+    op: ">="
+    value: 1
+    weight: 2.0
+  - name: device_blacklisted
+    feature: graph_device_fraud_cards
+    op: ">="
+    value: 1
+    weight: 1.5
+
+logistic:
+  C: 0.1
+  max_iter: 2000
+  # Categorical levels rarer than this share are grouped as "infrequent".
+  min_category_share: 0.001
+  # Columns the linear model uses. Raw Vesta (V*) and identity (id_*) columns
+  # are left to the tree model; integer codes like card1 are not quantities.
+  categorical: [ProductCD, card4, card6, P_emaildomain, R_emaildomain, DeviceType, M4, M6]
+  exclude_prefixes: ["V", "id_"]
+  exclude: [card1, card2, card3, card5, addr1, addr2, DeviceInfo]

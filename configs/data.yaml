@@ -19,7 +19,3 @@ reference_date: "2017-11-30"
 split:
   train_end: "2018-04-01"
   validation_end: "2018-05-01"
-
-# Chargebacks arrive late. Features that use fraud labels may only count
-# labels known at least this many days before the current transaction.
-label_delay_days: 30

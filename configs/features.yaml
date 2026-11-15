@@ -16,6 +16,21 @@ history_window: "3650d"
 # Behaviour z-scores need at least this many earlier transactions on the card.
 min_history_for_zscore: 2
 
+graph:
+  # Chargebacks arrive late. Graph features may only count a fraud label once
+  # this many days have passed since the fraudulent transaction.
+  label_delay_days: 30
+  # Entities that link cards for two-hop expansion. Email domains are left out:
+  # gmail.com would connect almost every card to every other card.
+  hop_entities: [device, address]
+  # Skip expansion through an entity with more cards than this (shared POS
+  # terminals, generic device strings); its own counts are still reported.
+  max_neighbours: 200
+  # "How many cards used this device / address" is counted over a rolling
+  # window. An all-time count only grows, so it acts as a clock and drifts
+  # (adversarial validation AUC hit 1.0 with all-time counts).
+  entity_window_days: 30
+
 adversarial:
   n_folds: 5
   max_rows: 200000
