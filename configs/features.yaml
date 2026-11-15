@@ -1,0 +1,23 @@
+# Feature configuration. Every aggregate uses only transactions with an
+# earlier timestamp than the current one (same-second rows are excluded).
+
+# Rolling windows for velocity features (Polars duration strings).
+velocity_windows: ["1h", "24h", "7d"]
+
+# Entities to compute velocity over: alias -> column.
+velocity_keys:
+  card: card_uid
+  email: P_emaildomain
+  device: DeviceInfo
+
+# "All history" window for behaviour features (longer than the dataset).
+history_window: "3650d"
+
+# Behaviour z-scores need at least this many earlier transactions on the card.
+min_history_for_zscore: 2
+
+adversarial:
+  n_folds: 5
+  max_rows: 200000
+  num_boost_round: 300
+  top_k: 15

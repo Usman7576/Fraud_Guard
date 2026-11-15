@@ -18,7 +18,8 @@ data/raw/*
 data/snapshots/
 mlruns/
 mlartifacts/
-reports/**/*.html
+# Generated reports stay local until they come from the real dataset.
+/reports/
 
 # Environment
 .env

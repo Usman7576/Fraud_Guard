@@ -10,17 +10,28 @@ from rich.console import Console
 from rich.table import Table
 
 from fraudguard import __version__
-from fraudguard.config import get_settings, load_data_config
+from fraudguard.config import PROJECT_ROOT, get_settings, load_data_config, load_feature_config
 from fraudguard.data import pipeline, synthetic
-from fraudguard.data.snapshot import SnapshotError, read_manifest
+from fraudguard.data.snapshot import SnapshotError, load_snapshot, read_manifest
+from fraudguard.features import pipeline as feature_pipeline
+from fraudguard.features.registry import GROUPS, feature_columns
 from fraudguard.log import setup_logging
+from fraudguard.reports import adversarial
 
 app = typer.Typer(help="FraudGuard: cost-aware fraud detection.", no_args_is_help=True)
 data_app = typer.Typer(help="Data foundation: raw files to versioned snapshots.", no_args_is_help=True)
+features_app = typer.Typer(help="Feature engineering.", no_args_is_help=True)
+report_app = typer.Typer(help="Analysis reports.", no_args_is_help=True)
 app.add_typer(data_app, name="data")
+app.add_typer(features_app, name="features")
+app.add_typer(report_app, name="report")
 console = Console()
 
 ConfigOpt = Annotated[Path | None, typer.Option("--config", help="Path to a data config YAML.")]
+FeatConfigOpt = Annotated[
+    Path | None, typer.Option("--features-config", help="Path to a feature config YAML.")
+]
+OutOpt = Annotated[Path, typer.Option("--out", help="Folder for report files.")]
 
 
 @app.callback()
@@ -102,8 +113,55 @@ def run_all(
     force: Annotated[bool, typer.Option(help="Rebuild every stage.")] = False,
     config: ConfigOpt = None,
 ) -> None:
-    """Rebuild everything. Stages are added here as they are built (features, train, evaluate, ...)."""
+    """Rebuild everything. Stages are added here as they are built (train, evaluate, ...)."""
     data_build(force=force, config=config)
+    features_build(force=force, config=config, features_config=None)
+    report_adversarial(config=config, features_config=None, out=PROJECT_ROOT / "reports")
+
+
+@features_app.command("build")
+def features_build(
+    force: Annotated[bool, typer.Option(help="Rebuild even if inputs are unchanged.")] = False,
+    config: ConfigOpt = None,
+    features_config: FeatConfigOpt = None,
+) -> None:
+    """Build every feature group from the base snapshot and write the features snapshot."""
+    data_cfg, feat_cfg = load_data_config(config), load_feature_config(features_config)
+    try:
+        result = feature_pipeline.build(data_cfg, feat_cfg, force=force)
+    except SnapshotError as exc:
+        console.print(f"[red]{exc}[/] Run `fraudguard data build` first.")
+        raise typer.Exit(1) from exc
+    for name, size in result.group_sizes.items():
+        console.print(f"  {name:<10} {size:>4} columns  [dim]{GROUPS[name].description}[/]")
+    status = "unchanged" if result.skipped else "written"
+    console.print(
+        f"Snapshot [bold]{feature_pipeline.STAGE}[/] {status}: {result.n_features} features, "
+        f"digest [cyan]{result.manifest.digest()}[/]"
+    )
+
+
+@report_app.command("adversarial")
+def report_adversarial(
+    config: ConfigOpt = None,
+    features_config: FeatConfigOpt = None,
+    out: OutOpt = PROJECT_ROOT / "reports",
+) -> None:
+    """Measure how different the test period is from training (adversarial validation)."""
+    data_cfg, feat_cfg = load_data_config(config), load_feature_config(features_config)
+    try:
+        features = load_snapshot(data_cfg.paths.snapshot_dir, feature_pipeline.STAGE, "features")
+    except SnapshotError as exc:
+        console.print(f"[red]{exc}[/] Run `fraudguard features build` first.")
+        raise typer.Exit(1) from exc
+    result = adversarial.run(features, feature_columns(features), feat_cfg.adversarial, data_cfg.seed)
+    json_path, _ = adversarial.write(result, out)
+    console.print(
+        f"Adversarial validation AUC [bold]{result.auc_mean:.3f}[/] ± {result.auc_std:.3f}: {result.verdict}"
+    )
+    for name, share in result.top_features[:5]:
+        console.print(f"  {name:<28} {share:>6.1%}")
+    console.print(f"Report written to {json_path.parent}")
 
 
 if __name__ == "__main__":

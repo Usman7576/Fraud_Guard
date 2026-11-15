@@ -5,6 +5,7 @@ description = "Cost-aware fraud detection with a monitored scoring API and analy
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "lightgbm>=4.5",
     "numpy>=2.1",
     "polars>=1.20",
     "pyarrow>=18.0",
@@ -12,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.6",
     "pyyaml>=6.0",
     "rich>=13.9",
+    "scikit-learn>=1.5",
     "typer>=0.15",
 ]
 
@@ -56,7 +58,7 @@ packages = ["fraudguard"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*"]
+module = ["pyarrow.*", "sklearn.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

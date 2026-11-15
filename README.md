@@ -4,7 +4,7 @@ Cost-aware fraud detection for online card payments: a scoring API that chooses 
 
 Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) dataset (590,540 e-commerce transactions, 3.5% fraud). It is evaluated on future data, in money terms, with confidence intervals.
 
-> **Status:** week 1 of 10, the data foundation. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
+> **Status:** week 2 of 10, leakage-safe features. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
 
 ## Stack
 
@@ -24,6 +24,8 @@ uv sync                               # installs Python 3.12 deps from uv.lock
 uv run fraudguard data synth          # optional: synthetic data, until the Kaggle files are in place
 uv run fraudguard all                 # rebuild every stage
 uv run fraudguard data info           # show the current snapshot manifest
+uv run fraudguard features build      # build the feature snapshot
+uv run fraudguard report adversarial  # train-vs-test drift report
 ```
 
 ### Getting the real data
@@ -37,6 +39,20 @@ uv run fraudguard data info           # show the current snapshot manifest
 - **Time split.** Train on Dec–Mar, validate on Apr, test on May. The boundaries are in [configs/data.yaml](configs/data.yaml). A Hypothesis property test checks that no split reaches into a later one, whatever the boundaries.
 - **Card identity.** IEEE-CIS has no card ID. `card_uid` combines `card1`, `addr1` and the account start day (`day - D1`). This is an approximation, and its label consistency is reported on every build.
 - **Versioned snapshots.** Each stage writes Parquet plus a `manifest.json` with SHA-256 hashes, row counts, schema, input hashes, a config fingerprint and the code version. A stage is skipped when its inputs and config are unchanged. Tampered files are rejected.
+
+## Features (week 2)
+
+Every aggregate uses only transactions with an **earlier timestamp** than the current one. Rows in the same second are excluded, so the online scorer can reproduce each value exactly. Windows and keys are in [configs/features.yaml](configs/features.yaml).
+
+| Group | Columns | What it captures |
+|---|---|---|
+| Base | raw C, D, M, V and id columns, card, address, email and device fields, plus `amt_log`, `amt_cents`, `hour`, `weekday` | Per-row facts; cannot leak |
+| Velocity | count and amount per card, email domain and device over 1h, 24h and 7d (18 columns) | Bursts of activity |
+| Behaviour | prior transaction count, new-card flag, seconds since last, amount z-score and ratio, hour-of-day deviation (circular mean) | How unusual this is *for this card* |
+
+**Leakage test.** [`features/leakage.py`](src/fraudguard/features/leakage.py) cuts the data at five points in time and rebuilds every feature without the future rows. If any past value changes, the test fails and names the column. To prove the test can catch leaks, [tests/test_leakage.py](tests/test_leakage.py) also runs it on five deliberately leaky features: a group-wide mean, a forward shift, label target encoding, a window that looks ahead, and global normalisation. The test must flag every one.
+
+**Adversarial validation.** `fraudguard report adversarial` trains LightGBM to tell training rows from test rows (5-fold CV). It reports the AUC and the features that drift most to `reports/adversarial_validation.{json,md}`. Lifetime counters such as `card_prior_txn` and `D1` grow with time, so they separate later months by construction. That is worth knowing before modelling, and the ablation study will show whether they earn their place.
 
 ## Development
 

@@ -38,3 +38,27 @@ def test_cli_build_and_info(data_config: DataConfig, tmp_path: object) -> None:
     info = runner.invoke(app, ["data", "info", "--config", str(cfg_path)])
     assert info.exit_code == 0, info.output
     assert "transactions" in info.output
+
+
+def test_cli_features_and_adversarial_report(data_config: DataConfig) -> None:
+    cfg_path = data_config.paths.raw_dir.parent / "data.yaml"
+    out_dir = data_config.paths.raw_dir.parent / "reports"
+    runner = CliRunner()
+
+    missing = runner.invoke(app, ["features", "build", "--config", str(cfg_path)])
+    assert missing.exit_code == 1  # no base snapshot yet
+
+    assert runner.invoke(app, ["data", "build", "--config", str(cfg_path)]).exit_code == 0
+    built = runner.invoke(app, ["features", "build", "--config", str(cfg_path)])
+    assert built.exit_code == 0, built.output
+    assert "velocity" in built.output
+
+    features = snapshot.load_snapshot(data_config.paths.snapshot_dir, "features", "features")
+    assert features.height == 3_000
+    again = runner.invoke(app, ["features", "build", "--config", str(cfg_path)])
+    assert "unchanged" in again.output
+
+    report = runner.invoke(app, ["report", "adversarial", "--config", str(cfg_path), "--out", str(out_dir)])
+    assert report.exit_code == 0, report.output
+    assert (out_dir / "adversarial_validation.json").exists()
+    assert (out_dir / "adversarial_validation.md").exists()

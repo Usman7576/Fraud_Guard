@@ -69,6 +69,29 @@ class DataConfig(BaseModel):
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
+class AdversarialConfig(BaseModel):
+    n_folds: int = Field(default=5, ge=2)
+    max_rows: int = Field(default=200_000, ge=1_000)
+    num_boost_round: int = Field(default=300, ge=10)
+    top_k: int = Field(default=15, ge=1)
+
+
+class FeatureConfig(BaseModel):
+    velocity_windows: list[str] = Field(min_length=1)
+    velocity_keys: dict[str, str] = Field(min_length=1)
+    history_window: str
+    min_history_for_zscore: int = Field(default=2, ge=2)
+    adversarial: AdversarialConfig = AdversarialConfig()
+
+    def fingerprint(self) -> str:
+        payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)
+        return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def load_feature_config(path: Path | None = None) -> FeatureConfig:
+    return FeatureConfig.model_validate(_read_yaml(path or CONFIG_DIR / "features.yaml"))
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
