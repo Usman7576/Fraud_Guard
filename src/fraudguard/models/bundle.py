@@ -9,7 +9,7 @@ the `champion` alias.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -36,15 +36,29 @@ class FraudModel:
     encoder: CategoryEncoder
     calibrator: Calibrator
     policy: Policy
+    # Tuned LightGBM parameters and rounds, kept so the model can be retrained on other feature sets.
+    params: dict[str, Any] = field(default_factory=dict)
+    rounds: int = 0
 
-    def raw_score(self, df: pl.DataFrame) -> np.ndarray:
+    def matrix(self, df: pl.DataFrame) -> np.ndarray:
         missing = [c for c in self.feature_names if c not in df.columns]
         if missing:
             raise KeyError(f"input is missing model features: {missing[:10]}")
-        return np.asarray(self.booster.predict(to_matrix(df, self.feature_names, self.encoder)))
+        return to_matrix(df, self.feature_names, self.encoder)
+
+    def raw_score(self, df: pl.DataFrame) -> np.ndarray:
+        return np.asarray(self.booster.predict(self.matrix(df)))
 
     def predict_proba(self, df: pl.DataFrame) -> np.ndarray:
         return self.calibrator.predict(self.raw_score(df))
+
+    def contributions(self, df: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        """Exact TreeSHAP values in log-odds, (n, features), plus each row's base value.
+
+        LightGBM computes these natively (`pred_contrib`), so no extra library or
+        sampling is needed, and they sum exactly to the raw log-odds score."""
+        out = np.asarray(self.booster.predict(self.matrix(df), pred_contrib=True))
+        return out[:, :-1], out[:, -1]
 
     def save(self, path: Path) -> Path:
         path.mkdir(parents=True, exist_ok=True)
@@ -54,6 +68,8 @@ class FraudModel:
             "categorical_levels": self.encoder.levels,
             "calibrator": self.calibrator.to_dict(),
             "policy": self.policy.as_dict(),
+            "params": self.params,
+            "rounds": self.rounds,
         }
         (path / META_FILE).write_text(json.dumps(meta, indent=1), encoding="utf-8")
         return path
@@ -67,6 +83,8 @@ class FraudModel:
             encoder=CategoryEncoder({k: list(v) for k, v in meta["categorical_levels"].items()}),
             calibrator=Calibrator.from_dict(meta["calibrator"]),
             policy=Policy(**meta["policy"]),
+            params=dict(meta.get("params", {})),
+            rounds=int(meta.get("rounds", 0)),
         )
 
 

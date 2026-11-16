@@ -29,6 +29,7 @@ import numpy as np
 import polars as pl
 import sklearn
 from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
 
 from fraudguard.config import DataConfig, LightGBMConfig, ModelConfig, Settings
 from fraudguard.data import pipeline as data_pipeline
@@ -38,6 +39,7 @@ from fraudguard.data.schema import AMOUNT, DT, LABEL
 from fraudguard.data.split import SPLIT, Split
 from fraudguard.decision import analysis
 from fraudguard.decision.policy import decline_threshold
+from fraudguard.errors import NoChampionError
 from fraudguard.features import pipeline as feature_pipeline
 from fraudguard.features.registry import feature_columns
 from fraudguard.log import get_logger
@@ -136,7 +138,9 @@ def train_champion(
     gain = booster.feature_importance("gain")
     top = sorted(zip(columns, gain / max(gain.sum(), 1e-12), strict=True), key=lambda t: -t[1])[:20]
     top_features = [(name, round(float(share), 4)) for name, share in top]
-    fraud_model = FraudModel(booster, columns, encoder, calibrator, policy)
+    fraud_model = FraudModel(
+        booster, columns, encoder, calibrator, policy, tuning.best_params, tuning.best_rounds
+    )
 
     with tracking.run(
         settings.mlflow_tracking_uri,
@@ -262,6 +266,16 @@ def _register(model_uri: str, run_id: str, is_champion: bool) -> str | None:
             version.version,
         )
     return str(version.version)
+
+
+def champion_version(tracking_uri: str) -> tuple[str, str]:
+    """(version, training run id) behind the `champion` alias."""
+    mlflow.set_tracking_uri(tracking_uri)
+    try:
+        mv = MlflowClient().get_model_version_by_alias(REGISTERED_NAME, CHAMPION_ALIAS)
+    except MlflowException as exc:
+        raise NoChampionError(f"no `{REGISTERED_NAME}@{CHAMPION_ALIAS}` model in {tracking_uri}") from exc
+    return str(mv.version), str(mv.run_id or mv.tags.get("run_id", ""))
 
 
 def load_champion(tracking_uri: str) -> FraudModel:

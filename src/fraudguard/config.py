@@ -162,8 +162,30 @@ class DecisionConfig(BaseModel):
     sensitivity_factors: list[float] = Field(default=[0.5, 1.0, 2.0], min_length=1)
 
 
+class FinalEvaluationConfig(BaseModel):
+    n_resamples: int = Field(default=1000, ge=10)
+    resample_unit: Literal["day", "row"] = "day"
+    confidence: float = Field(default=0.95, gt=0.5, lt=1)
+    amount_bands: list[float] = Field(default=[50, 100, 250, 500, 1000], min_length=1)
+    top_email_domains: int = Field(default=8, ge=1)
+
+
+class AblationConfig(BaseModel):
+    drift_prone: list[str] = Field(default_factory=list)
+    n_resamples: int = Field(default=300, ge=10)
+    adversarial: bool = True
+
+
+class ExplainConfig(BaseModel):
+    n_reasons: int = Field(default=3, ge=1)
+    global_sample: int = Field(default=5000, ge=100)
+
+
 class ModelConfig(BaseModel):
     evaluation: EvaluationConfig = EvaluationConfig()
+    evaluation_final: FinalEvaluationConfig = FinalEvaluationConfig()
+    ablation: AblationConfig = AblationConfig()
+    explain: ExplainConfig = ExplainConfig()
     rules: list[RuleConfig] = Field(min_length=1)
     logistic: LogisticConfig = LogisticConfig()
     lightgbm: LightGBMConfig = LightGBMConfig()

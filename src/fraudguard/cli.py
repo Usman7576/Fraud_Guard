@@ -19,6 +19,7 @@ from fraudguard.config import (
 )
 from fraudguard.data import pipeline, synthetic
 from fraudguard.data.snapshot import SnapshotError, load_snapshot, read_manifest
+from fraudguard.errors import NoChampionError
 from fraudguard.features import pipeline as feature_pipeline
 from fraudguard.features.registry import GROUPS, feature_columns
 from fraudguard.log import setup_logging
@@ -128,6 +129,8 @@ def run_all(
     report_adversarial(config=config, features_config=None, out=PROJECT_ROOT / "reports")
     train_baselines(config=config, model_config=None, out=PROJECT_ROOT / "reports")
     train_lightgbm(config=config, model_config=None, out=PROJECT_ROOT / "reports", trials=trials)
+    report_ablation(config=config, model_config=None, features_config=None, out=PROJECT_ROOT / "reports")
+    evaluate(config=config, model_config=None, out=PROJECT_ROOT / "reports")
 
 
 ModelConfigOpt = Annotated[Path | None, typer.Option("--model-config", help="Path to a model config YAML.")]
@@ -218,6 +221,83 @@ def train_lightgbm(
     console.print(f"Reports at {json_path} and {md_path}")
 
 
+@report_app.command("ablation")
+def report_ablation(
+    config: ConfigOpt = None,
+    model_config: ModelConfigOpt = None,
+    features_config: FeatConfigOpt = None,
+    out: OutOpt = PROJECT_ROOT / "reports",
+) -> None:
+    """Retrain the champion on growing feature sets; PR-AUC and drift for each (validation month)."""
+    from fraudguard.evaluation import ablation  # noqa: PLC0415
+
+    data_cfg, model_cfg = load_data_config(config), load_model_config(model_config)
+    try:
+        r = ablation.run_ablation(data_cfg, model_cfg, load_feature_config(features_config), get_settings())
+    except (SnapshotError, NoChampionError) as exc:
+        console.print(f"[red]{exc}[/] Run `fraudguard train lightgbm` first.")
+        raise typer.Exit(1) from exc
+    table = Table(title="Feature group ablation (validation)", header_style="bold")
+    for col in ("feature set", "features", "PR-AUC", "gain", "adversarial AUC"):
+        table.add_column(col, justify="left" if col == "feature set" else "right")
+    for row in r.rows:
+        g = row.gain_pr_auc
+        table.add_row(
+            row.name,
+            str(row.n_features),
+            f"{row.pr_auc.estimate:.3f}",
+            f"{g.estimate:+.3f} [{g.low:+.3f}, {g.high:+.3f}]" if g else "-",
+            f"{row.adversarial_auc:.3f}" if row.adversarial_auc is not None else "-",
+        )
+    console.print(table)
+    json_path, _ = ablation.write_reports(r, out)
+    console.print(f"Report written to {json_path.parent}")
+
+
+@app.command("evaluate")
+def evaluate(
+    config: ConfigOpt = None,
+    model_config: ModelConfigOpt = None,
+    out: OutOpt = PROJECT_ROOT / "reports",
+) -> None:
+    """Final evaluation of the champion on the untouched test month, with bootstrap intervals."""
+    from fraudguard.evaluation import final  # noqa: PLC0415
+
+    data_cfg, model_cfg = load_data_config(config), load_model_config(model_config)
+    try:
+        r = final.run_evaluation(data_cfg, model_cfg, get_settings())
+    except (SnapshotError, NoChampionError) as exc:
+        console.print(f"[red]{exc}[/] Run `fraudguard train lightgbm` first.")
+        raise typer.Exit(1) from exc
+    iv = r.intervals
+    pct = f"{r.confidence:.0%}"
+    table = Table(title=f"Test month, champion v{r.model_version} ({pct} intervals)", header_style="bold")
+    for col in ("metric", "LightGBM", "rules", "difference"):
+        table.add_column(col, justify="left" if col == "metric" else "right")
+
+    def ci(name: str, fmt: str) -> str:
+        v = iv[name]
+        return f"{v.estimate:{fmt}} [{v.low:{fmt}}, {v.high:{fmt}}]"
+
+    table.add_row("PR-AUC", ci("model_pr_auc", ".3f"), ci("rules_pr_auc", ".3f"), ci("diff_pr_auc", "+.3f"))
+    table.add_row(
+        f"recall @ {r.model_metrics.target_fpr:.0%} FPR",
+        ci("model_recall_at_fpr", ".1%"),
+        ci("rules_recall_at_fpr", ".1%"),
+        ci("diff_recall_at_fpr", "+.1%"),
+    )
+    table.add_row(
+        "cost per 10k",
+        ci("model_cost_per_10k", ",.0f"),
+        ci("rules_cost_per_10k", ",.0f"),
+        ci("cost_saved_per_10k", ",.0f"),
+    )
+    console.print(table)
+    console.print(f"Cost saving vs rules {ci('cost_saving_share', '.1%')}; ECE {r.ece:.4f}")
+    json_path, md_path = final.write_reports(r, out)
+    console.print(f"Reports at {json_path} and {md_path}")
+
+
 @features_app.command("build")
 def features_build(
     force: Annotated[bool, typer.Option(help="Rebuild even if inputs are unchanged.")] = False,
@@ -256,7 +336,7 @@ def report_adversarial(
     result = adversarial.run(features, feature_columns(features), feat_cfg.adversarial, data_cfg.seed)
     json_path, _ = adversarial.write(result, out)
     console.print(
-        f"Adversarial validation AUC [bold]{result.auc_mean:.3f}[/] ± {result.auc_std:.3f}: {result.verdict}"
+        f"Adversarial validation AUC [bold]{result.auc_mean:.3f}[/] Â± {result.auc_std:.3f}: {result.verdict}"
     )
     for name, share in result.top_features[:5]:
         console.print(f"  {name:<28} {share:>6.1%}")

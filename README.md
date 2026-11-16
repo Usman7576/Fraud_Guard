@@ -4,7 +4,7 @@ Cost-aware fraud detection for online card payments: a scoring API that chooses 
 
 Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) dataset (590,540 e-commerce transactions, 3.5% fraud). It is evaluated on future data, in money terms, with confidence intervals.
 
-> **Status:** week 4 of 10, tuned LightGBM, calibration and the cost-based decision policy. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
+> **Status:** week 5 of 10, final test-month evaluation with confidence intervals, ablation and SHAP reason codes. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
 
 ## Stack
 
@@ -28,6 +28,8 @@ uv run fraudguard features build      # build the feature snapshot
 uv run fraudguard report adversarial  # train-vs-test drift report
 uv run fraudguard train baselines     # rules and logistic regression
 uv run fraudguard train lightgbm      # tune, calibrate, choose the policy, register the champion
+uv run fraudguard report ablation     # what each feature group adds, and what it costs in drift
+uv run fraudguard evaluate            # final test-month results with bootstrap intervals
 ```
 
 ### Getting the real data
@@ -115,6 +117,53 @@ On 20,000 synthetic rows (validation month; the real dataset will be harder):
 | Logistic regression | 0.857 | 84.4% | - |
 | LightGBM + policy | 0.881 | 86.9% | $4,537 (66% less than rules) |
 | Approve everything | - | - | $117,365 |
+
+## Final evaluation, ablation and explanations (week 5)
+
+**Test month** (`fraudguard evaluate`). The champion is loaded from the registry, with the calibrator and policy it was registered with. The rules baseline's thresholds are fixed on validation. Nothing is chosen on the test month. Every number has a 95% bootstrap interval from 1,000 resamples of **whole days**, not single rows. Fraud comes in bursts, and resampling rows would treat one ring's afternoon as fifty independent events, making the intervals too narrow. Differences against the rules are **paired**: both are scored on the same resampled days, so shared noise cancels out.
+
+On 20,000 synthetic rows (test month: 3,362 transactions, 108 fraud):
+
+| Metric | LightGBM | Rules | Difference |
+|---|---:|---:|---:|
+| PR-AUC | 0.884 [0.828, 0.939] | 0.694 [0.591, 0.791] | +0.191 [+0.128, +0.251] |
+| Recall at 1% FPR | 91.7% [86.2%, 96.4%] | 84.3% [40.0%, 90.3%] | +7.4% [+3.0%, +50.9%] |
+| Fraud $ caught | 97.6% [94.5%, 99.5%] | 94.9% [89.7%, 98.6%] | |
+| Cost per 10k | $3,829 [2,091, 6,428] | $12,748 [9,676, 16,752] | saves $8,919 [6,092, 12,534] |
+
+Cost saving vs rules: **70.0% [54.4%, 82.8%]**. Brier 0.0057, expected calibration error 0.0033. The rules' recall interval is very wide because their score takes only a few values, so the 1% FPR cut lands on large ties. `reports/evaluation.md` also has an **error analysis** of the fraud each policy lets through. It splits that fraud by:
+- amount band
+- product code
+- device type
+- email domain
+- new vs returning card
+
+**Ablation** (`fraudguard report ablation`, validation month). Feature groups are added in turn and each set is retrained with the champion's tuned parameters. *Gain* is the paired PR-AUC difference against the previous row. *Adversarial AUC* is how easily the test month can be told apart from training using only that feature set.
+
+| Feature set | Features | PR-AUC | Gain | Adversarial AUC |
+|---|---:|---:|---:|---:|
+| base | 26 | 0.729 [0.660, 0.807] | - | 0.703 |
+| + velocity | 44 | 0.728 [0.653, 0.803] | -0.001 [-0.027, +0.024] | 0.911 |
+| + behaviour | 51 | 0.789 [0.713, 0.861] | +0.061 [+0.031, +0.088] | 0.943 |
+| + graph | 61 | 0.881 [0.844, 0.922] | **+0.092 [+0.039, +0.143]** | 1.000 |
+| all − lifetime counters | 55 | 0.861 [0.814, 0.914] | -0.021 [-0.043, +0.005] | 0.992 |
+
+The entity graph is the largest single gain. Dropping the six lifetime counters costs 0.021 PR-AUC, and the interval includes zero, but it barely reduces drift (1.000 → 0.992). So the counters are not the main source of the drift, and they stay for now. On synthetic data, velocity adds nothing. These conclusions are re-checked on the real data.
+
+**Explanations.** LightGBM computes exact TreeSHAP values natively (`pred_contrib`), so no extra library or sampling is needed, and the contributions add up exactly to the model's log-odds. [`explain/reasons.py`](src/fraudguard/explain/reasons.py) turns the top three *risk-raising* features into plain language, using the transaction's real values. For example:
+- "7 earlier transactions on this card in the last 1h"
+- "linked to 56 confirmed-fraud cards through shared devices or addresses"
+- "amount is +3.2 standard deviations from this card's usual"
+
+IEEE-CIS's masked columns (C, D, M, V, id_) are described as masked rather than given an invented meaning. The evaluation report lists the global mean |SHAP| and example reason codes. The scoring API will return them with every decision.
+
+### Limits
+
+- Most IEEE-CIS columns are masked by the data provider. Some may stand in for location or demographics, and that cannot be audited here.
+- Labels are reported chargebacks; fraud that was never reported is invisible to the model.
+- Costs are assumptions, not merchant data (see the sensitivity analysis).
+- `card_uid` approximates a card; a real deployment would use a tokenised card ID.
+- Results hold for this merchant mix and period. The drift monitoring (week 8) measures how fast they degrade.
 
 ## Development
 

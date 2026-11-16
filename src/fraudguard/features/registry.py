@@ -54,3 +54,14 @@ def build_features(df: pl.DataFrame, cfg: FeatureConfig, groups: Sequence[str] |
 
 def feature_columns(df: pl.DataFrame) -> list[str]:
     return [c for c in df.columns if c not in META_COLUMNS]
+
+
+def group_of(column: str) -> str:
+    """Which feature group produced a column (used by the ablation study)."""
+    if column in graph.COLUMNS:
+        return "graph"
+    if column in behaviour.COLUMNS:
+        return "behaviour"
+    if column.startswith("vel_"):
+        return "velocity"
+    return "base"

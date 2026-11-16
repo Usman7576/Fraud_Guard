@@ -83,3 +83,28 @@ decision:
   risk_multipliers: {min: 0.125, max: 8.0, n: 25}
   # Cost assumptions are scaled by each factor for the sensitivity analysis.
   sensitivity_factors: [0.5, 1.0, 2.0]
+
+evaluation_final:
+  # Bootstrap confidence intervals on the test month. Resampling whole days
+  # (not single rows) respects that fraud arrives in bursts: a ring hitting
+  # one afternoon is one event, not fifty independent ones.
+  n_resamples: 1000
+  resample_unit: day   # day | row
+  confidence: 0.95
+  # Error analysis: amount bands (upper edges) and how many email domains to list.
+  amount_bands: [50, 100, 250, 500, 1000]
+  top_email_domains: 8
+
+ablation:
+  # Feature groups are added in turn and each set is retrained with the
+  # champion's tuned parameters, then scored on the validation month.
+  # The last variant drops lifetime counters that only grow with time; they
+  # act as clocks and drive the train-vs-test drift (adversarial validation).
+  drift_prone: [card_prior_txn, graph_card_n_devices, graph_card_n_addresses, graph_card_n_emails, graph_2hop_cards, D1]
+  n_resamples: 300
+  adversarial: true   # also measure train-vs-test drift for each feature set
+
+explain:
+  n_reasons: 3
+  # Rows from the test month used for the global SHAP summary.
+  global_sample: 5000
