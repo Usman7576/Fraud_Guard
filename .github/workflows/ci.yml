@@ -38,4 +38,4 @@ jobs:
       - name: Pipeline smoke run on synthetic data
         run: |
           uv run fraudguard data synth --rows 5000
-          uv run fraudguard all
+          uv run fraudguard all --trials 10

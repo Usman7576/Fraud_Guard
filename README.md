@@ -4,7 +4,7 @@ Cost-aware fraud detection for online card payments: a scoring API that chooses 
 
 Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) dataset (590,540 e-commerce transactions, 3.5% fraud). It is evaluated on future data, in money terms, with confidence intervals.
 
-> **Status:** week 3 of 10, entity graph features and baselines. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
+> **Status:** week 4 of 10, tuned LightGBM, calibration and the cost-based decision policy. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
 
 ## Stack
 
@@ -26,6 +26,8 @@ uv run fraudguard all                 # rebuild every stage
 uv run fraudguard data info           # show the current snapshot manifest
 uv run fraudguard features build      # build the feature snapshot
 uv run fraudguard report adversarial  # train-vs-test drift report
+uv run fraudguard train baselines     # rules and logistic regression
+uv run fraudguard train lightgbm      # tune, calibrate, choose the policy, register the champion
 ```
 
 ### Getting the real data
@@ -75,6 +77,44 @@ Labels respect a **30-day chargeback delay**: a fraudulent transaction only mark
 | Logistic regression | Engineered features plus C, D and M columns. Signed-log transform, median imputation with missing-value flags, rare categories grouped. |
 
 Metrics: PR-AUC, ROC-AUC, recall and precision at 1% FPR, Brier score and log loss. The test month is not used until the final evaluation.
+
+## LightGBM and the decision layer (week 4)
+
+`fraudguard train lightgbm` trains the main model and decides what to do with its scores.
+
+**Tuning.** Optuna (TPE sampler, median pruning, seed 42) searches learning rate, leaves, minimum leaf size, feature and row sampling, L1/L2 and categorical smoothing. It never sees the validation month. The training months are cut into four time chunks. Each fold trains on the earlier chunks and scores the next one, so every fold predicts the future from the past. Trials are ranked by mean PR-AUC. The final model is refitted on all training months. Defaults are 60 trials or 60 minutes, whichever comes first (`--trials` overrides the count).
+
+**Calibration.** The policy multiplies probabilities by dollar amounts, so a score of 0.3 has to mean about 30% fraud. Isotonic regression is fitted on the validation month. Its quality is measured out-of-fold: each of five time blocks is calibrated by the other four. The report shows expected calibration error and a reliability table before and after. The bins are log-spaced, because most transactions have small probabilities.
+
+**Cost model** ([configs/model.yaml](configs/model.yaml)). These costs are **assumptions, not merchant data**:
+
+| Outcome | Cost |
+|---|---|
+| Fraud approved | the transaction amount (the merchant pays the chargeback) |
+| Genuine customer declined | $15 (lost margin plus churn risk) |
+| Sent to an analyst | $3 per case, at most 200 cases a day |
+
+**Policy** ([`decision/policy.py`](src/fraudguard/decision/policy.py)). For calibrated probability p and amount A, the expected costs are:
+- approve: p·A
+- decline: (1−p)·$15
+- review: $3
+
+The cheapest action wins. This makes the rule amount-aware: a $2,000 transaction is declined above about 0.7% fraud probability, a $25 one only above 37.5%. The review band is wherever an analyst costs less than either mistake. When a day has more review candidates than capacity, the cases where review saves the most go first, and the rest get the cheaper of approve and decline.
+
+On validation, a sweep of an odds multiplier checks whether to trust the calibration. A best multiplier near 1 means the probabilities are honest. The rules baseline gets the same chance: its review and decline thresholds are chosen to minimise cost on the same data.
+
+**Sensitivity.** The false-decline and review costs are guesses, so the whole comparison is repeated with each one halved and doubled (a 3 × 3 grid). Results are in `reports/decision.md` and `reports/champion.json`, alongside cost curves for the console's cost explorer.
+
+**Registry.** The model is stored as plain files: the LightGBM text model and a JSON file with the feature list, category vocabulary, calibrator and policy. It is logged to MLflow as code, so nothing is pickled, and registered as `fraudguard`. The `champion` alias moves to the new version only if it beats the rules baseline on cost. The scoring API will load `models:/fraudguard@champion`.
+
+On 20,000 synthetic rows (validation month; the real dataset will be harder):
+
+| | PR-AUC | Recall at 1% FPR | Cost per 10k transactions |
+|---|---:|---:|---:|
+| Rules (best thresholds) | 0.573 | 44.3% | $13,400 |
+| Logistic regression | 0.857 | 84.4% | - |
+| LightGBM + policy | 0.881 | 86.9% | $4,537 (66% less than rules) |
+| Approve everything | - | - | $117,365 |
 
 ## Development
 

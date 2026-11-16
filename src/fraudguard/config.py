@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 from datetime import date
 from functools import lru_cache
@@ -118,10 +119,56 @@ class EvaluationConfig(BaseModel):
     target_fpr: float = Field(default=0.01, gt=0, lt=1)
 
 
+class LightGBMConfig(BaseModel):
+    n_trials: int = Field(default=60, ge=1)
+    timeout_minutes: float = Field(default=60, gt=0)
+    n_folds: int = Field(default=3, ge=1)
+    early_stopping_rounds: int = Field(default=100, ge=5)
+    max_rounds: int = Field(default=3000, ge=10)
+    categorical_min_count: int = Field(default=30, ge=1)
+    categorical_max_levels: int = Field(default=200, ge=1)
+    exclude: list[str] = Field(default_factory=list)
+
+
+class CalibrationConfig(BaseModel):
+    n_folds: int = Field(default=5, ge=2)
+    bin_edges: list[float] = Field(default=[0.0, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 0.6, 1.0], min_length=2)
+
+    @model_validator(mode="after")
+    def _edges(self) -> CalibrationConfig:
+        e = self.bin_edges
+        if e[0] != 0.0 or e[-1] != 1.0 or any(a >= b for a, b in itertools.pairwise(e)):
+            raise ValueError("calibration.bin_edges must rise strictly from 0.0 to 1.0")
+        return self
+
+
+class MultiplierGrid(BaseModel):
+    min: float = Field(default=0.125, gt=0)
+    max: float = Field(default=8.0, gt=0)
+    n: int = Field(default=25, ge=1)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> MultiplierGrid:
+        if self.min > 1.0 or self.max < 1.0:
+            raise ValueError("risk_multipliers must include 1.0 (min <= 1 <= max)")
+        return self
+
+
+class DecisionConfig(BaseModel):
+    false_decline_cost: float = Field(default=15.0, ge=0)
+    review_cost: float = Field(default=3.0, ge=0)
+    review_capacity_per_day: int = Field(default=200, ge=0)
+    risk_multipliers: MultiplierGrid = MultiplierGrid()
+    sensitivity_factors: list[float] = Field(default=[0.5, 1.0, 2.0], min_length=1)
+
+
 class ModelConfig(BaseModel):
     evaluation: EvaluationConfig = EvaluationConfig()
     rules: list[RuleConfig] = Field(min_length=1)
     logistic: LogisticConfig = LogisticConfig()
+    lightgbm: LightGBMConfig = LightGBMConfig()
+    calibration: CalibrationConfig = CalibrationConfig()
+    decision: DecisionConfig = DecisionConfig()
 
     def fingerprint(self) -> str:
         payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)

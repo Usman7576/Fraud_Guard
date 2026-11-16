@@ -120,20 +120,23 @@ def data_info(config: ConfigOpt = None) -> None:
 def run_all(
     force: Annotated[bool, typer.Option(help="Rebuild every stage.")] = False,
     config: ConfigOpt = None,
+    trials: Annotated[int | None, typer.Option(help="Override the number of Optuna trials.")] = None,
 ) -> None:
     """Rebuild everything. Stages are added here as they are built (train, evaluate, ...)."""
     data_build(force=force, config=config)
     features_build(force=force, config=config, features_config=None)
     report_adversarial(config=config, features_config=None, out=PROJECT_ROOT / "reports")
     train_baselines(config=config, model_config=None, out=PROJECT_ROOT / "reports")
+    train_lightgbm(config=config, model_config=None, out=PROJECT_ROOT / "reports", trials=trials)
+
+
+ModelConfigOpt = Annotated[Path | None, typer.Option("--model-config", help="Path to a model config YAML.")]
 
 
 @train_app.command("baselines")
 def train_baselines(
     config: ConfigOpt = None,
-    model_config: Annotated[
-        Path | None, typer.Option("--model-config", help="Path to a model config YAML.")
-    ] = None,
+    model_config: ModelConfigOpt = None,
     out: OutOpt = PROJECT_ROOT / "reports",
 ) -> None:
     """Fit the rules baseline and logistic regression; compare them on the validation month."""
@@ -165,6 +168,54 @@ def train_baselines(
     console.print(table)
     path = baselines.write_report(report, out)
     console.print(f"Runs logged to MLflow ({get_settings().mlflow_experiment}); report at {path}")
+
+
+@train_app.command("lightgbm")
+def train_lightgbm(
+    config: ConfigOpt = None,
+    model_config: ModelConfigOpt = None,
+    out: OutOpt = PROJECT_ROOT / "reports",
+    trials: Annotated[int | None, typer.Option(help="Override the number of Optuna trials.")] = None,
+) -> None:
+    """Tune LightGBM, calibrate it, choose the cost-optimal policy and register the champion."""
+    from fraudguard.models import champion  # noqa: PLC0415
+
+    data_cfg, model_cfg = load_data_config(config), load_model_config(model_config)
+    try:
+        r = champion.train_champion(data_cfg, model_cfg, get_settings(), n_trials=trials)
+    except SnapshotError as exc:
+        console.print(f"[red]{exc}[/] Run `fraudguard features build` first.")
+        raise typer.Exit(1) from exc
+
+    v = r.validation_raw
+    console.print(
+        f"LightGBM validation: PR-AUC [bold]{v.pr_auc:.4f}[/], recall {v.recall_at_fpr:.1%} at "
+        f"{v.target_fpr:.0%} FPR, ECE {r.ece_raw:.4f} raw -> {r.ece_calibrated:.4f} calibrated"
+    )
+    table = Table(title="Validation month, cost per 10,000 transactions", header_style="bold")
+    for col in ("policy", "cost", "declined", "reviewed", "fraud caught"):
+        table.add_column(col, justify="left" if col == "policy" else "right")
+    for name, cost in (
+        ("LightGBM + policy", r.model_policy["cost"]),
+        ("Rules", r.rules_policy["cost"]),
+        ("Approve everything", r.approve_all),
+    ):
+        assert isinstance(cost, dict)
+        table.add_row(
+            name,
+            f"${cost['per_10k']:,.0f}",
+            f"{cost['decline_rate']:.2%}",
+            f"{cost['review_rate']:.2%}",
+            f"{cost['fraud_caught']:.1%}",
+        )
+    console.print(table)
+    status = "[green]champion[/]" if r.is_champion else "[yellow]not champion (rules are cheaper)[/]"
+    console.print(
+        f"Saving vs rules {r.saving_vs_rules:.1%}. "
+        f"Registered {champion.REGISTERED_NAME} v{r.model_version}: {status}"
+    )
+    json_path, md_path = champion.write_reports(r, out)
+    console.print(f"Reports at {json_path} and {md_path}")
 
 
 @features_app.command("build")

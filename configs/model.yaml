@@ -49,3 +49,37 @@ logistic:
   categorical: [ProductCD, card4, card6, P_emaildomain, R_emaildomain, DeviceType, M4, M6]
   exclude_prefixes: ["V", "id_"]
   exclude: [card1, card2, card3, card5, addr1, addr2, DeviceInfo]
+
+lightgbm:
+  # Optuna searches hyperparameters on time-ordered folds inside the training
+  # months (expanding window: fit on earlier chunks, score the next chunk).
+  n_trials: 60
+  timeout_minutes: 60
+  n_folds: 3
+  early_stopping_rounds: 100
+  max_rounds: 3000
+  # String columns become LightGBM categoricals. Levels seen fewer times than
+  # this in training are grouped as "other"; at most this many levels are kept.
+  categorical_min_count: 30
+  categorical_max_levels: 200
+  exclude: []
+
+calibration:
+  # Isotonic regression maps raw scores to fraud probabilities. It is fitted on
+  # the validation month; its quality is measured out-of-fold on time blocks.
+  n_folds: 5
+  # Reliability diagram and ECE bins, roughly log-spaced: most rows (and most
+  # decisions) sit at small probabilities.
+  bin_edges: [0.0, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 0.6, 1.0]
+
+decision:
+  # Costs are assumptions, not merchant data (see the sensitivity analysis).
+  # Approving fraud costs the transaction amount (the merchant pays the chargeback).
+  false_decline_cost: 15.0   # genuine customer declined: lost margin plus churn risk
+  review_cost: 3.0           # analyst time per case
+  review_capacity_per_day: 200
+  # Odds multipliers tried on top of the calibrated probability. 1.0 means
+  # "trust the calibration"; the sweep checks whether that holds.
+  risk_multipliers: {min: 0.125, max: 8.0, n: 25}
+  # Cost assumptions are scaled by each factor for the sensitivity analysis.
+  sensitivity_factors: [0.5, 1.0, 2.0]
