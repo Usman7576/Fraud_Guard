@@ -172,22 +172,7 @@ def train_champion(
         mlflow.log_dict({"trials": tuning.trials}, "tuning_trials.json")
         mlflow.log_dict({"top_features": top_features}, "top_features.json")
         mlflow.log_dict({"sensitivity": [asdict(r) for r in sens]}, "sensitivity.json")
-        with tempfile.TemporaryDirectory() as tmp:
-            bundle_dir = fraud_model.save(Path(tmp) / "bundle")
-            info = mlflow.pyfunc.log_model(
-                name="model",
-                python_model=str(PYFUNC_ENTRY),
-                artifacts={"bundle": str(bundle_dir)},
-                signature=signature(valid, columns),
-                input_example=pyfunc_input(valid.head(5), columns),
-                pip_requirements=[
-                    f"lightgbm=={lgb.__version__}",
-                    f"numpy=={np.__version__}",
-                    f"polars=={pl.__version__}",
-                    f"scikit-learn=={sklearn.__version__}",
-                    f"mlflow=={mlflow.__version__}",
-                ],
-            )
+        info = log_bundle(fraud_model, valid)
         run_id = active.info.run_id
 
     is_champion = model_choice.cost.total < rules_choice.cost.total
@@ -251,6 +236,27 @@ def _tune_and_fit(
         seed=seed,
     )
     return booster, encoder, tuning
+
+
+def log_bundle(fraud_model: FraudModel, sample: pl.DataFrame) -> Any:
+    """Log the bundle to the active MLflow run as a pyfunc model (code, not pickle); returns ModelInfo."""
+    columns = fraud_model.feature_names
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle_dir = fraud_model.save(Path(tmp) / "bundle")
+        return mlflow.pyfunc.log_model(
+            name="model",
+            python_model=str(PYFUNC_ENTRY),
+            artifacts={"bundle": str(bundle_dir)},
+            signature=signature(sample, columns),
+            input_example=pyfunc_input(sample.head(5), columns),
+            pip_requirements=[
+                f"lightgbm=={lgb.__version__}",
+                f"numpy=={np.__version__}",
+                f"polars=={pl.__version__}",
+                f"scikit-learn=={sklearn.__version__}",
+                f"mlflow=={mlflow.__version__}",
+            ],
+        )
 
 
 def _register(model_uri: str, run_id: str, is_champion: bool) -> str | None:

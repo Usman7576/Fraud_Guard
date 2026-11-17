@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     serve_history_until: Literal["train", "validation", "test"] = "validation"
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    # Where weekly drift reports (Evidently HTML) are written by the replay worker and served from.
+    reports_dir: Path = PROJECT_ROOT / "reports"
 
 
 class Paths(BaseModel):
@@ -206,6 +208,39 @@ class ModelConfig(BaseModel):
     def fingerprint(self) -> str:
         payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+class ReplayConfig(BaseModel):
+    start_split: Literal["validation", "test"] = "validation"
+    batch_size: int = Field(default=250, ge=1, le=1000)
+
+
+class DriftConfig(BaseModel):
+    reference_rows: int = Field(default=20_000, ge=100)
+    n_features: int = Field(default=30, ge=1)
+    share_threshold: float = Field(default=0.3, gt=0, le=1)
+    min_rows: int = Field(default=200, ge=1)
+
+
+class RetrainingConfig(BaseModel):
+    recall_drop: float = Field(default=0.05, gt=0, lt=1)
+    min_weeks_between: int = Field(default=2, ge=0)
+    window_days: int = Field(default=180, ge=14)
+    calibration_days: int = Field(default=14, ge=1)
+    evaluation_days: int = Field(default=14, ge=1)
+    n_resamples: int = Field(default=300, ge=10)
+    confidence: float = Field(default=0.95, gt=0.5, lt=1)
+
+
+class MonitoringConfig(BaseModel):
+    replay: ReplayConfig = ReplayConfig()
+    label_delay_days: int = Field(default=30, ge=0)
+    drift: DriftConfig = DriftConfig()
+    retraining: RetrainingConfig = RetrainingConfig()
+
+
+def load_monitoring_config(path: Path | None = None) -> MonitoringConfig:
+    return MonitoringConfig.model_validate(_read_yaml(path or CONFIG_DIR / "monitoring.yaml"))
 
 
 def load_model_config(path: Path | None = None) -> ModelConfig:

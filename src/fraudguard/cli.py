@@ -441,22 +441,100 @@ def db_add_user(
 @db_app.command("add-api-key")
 def db_add_api_key(
     name: Annotated[str, typer.Argument(help="Who uses the key, e.g. replay-worker.")],
+    scope: Annotated[
+        list[str] | None,
+        typer.Option(help="score, labels or promote; repeat for several (default: score)."),
+    ] = None,
 ) -> None:
-    """Create an API key for /score. The key is shown once; only its hash is stored."""
+    """Create an API key. The key is shown once; only its hash is stored.
+
+    The replay worker needs all three scopes: --scope score --scope labels --scope promote."""
     from fraudguard.api import db  # noqa: PLC0415
     from fraudguard.api.security import new_api_key  # noqa: PLC0415
 
+    scopes = sorted(set(scope or ["score"]))
+    if bad := [s for s in scopes if s not in {"score", "labels", "promote"}]:
+        console.print(f"[red]unknown scope(s): {bad}[/]")
+        raise typer.Exit(1)
     key, key_hash = new_api_key()
 
     async def go(database: Any) -> None:
         await db.init_db(database)
-        doc = {"name": name, "key_hash": key_hash, "active": True, "created_at": db.now()}
+        doc = {"name": name, "key_hash": key_hash, "active": True, "scopes": scopes, "created_at": db.now()}
         await database.api_keys.insert_one(doc)
-        await db.audit(database, "cli", "api_key.create", f"api_key:{name}")
+        await db.audit(database, "cli", "api_key.create", f"api_key:{name}", after={"scopes": scopes})
 
     _run_db(go)
-    console.print(f"API key for [bold]{name}[/] (shown once, store it safely):")
+    console.print(
+        f"API key for [bold]{name}[/] with scopes {', '.join(scopes)} (shown once, store it safely):"
+    )
     console.print(key, markup=False, highlight=False)
+
+
+@app.command()
+def replay(
+    api_url: Annotated[str, typer.Option(help="Base URL of the running API.")] = "http://127.0.0.1:8000",
+    max_weeks: Annotated[int | None, typer.Option(help="Stop after this many weeks.")] = None,
+    config: ConfigOpt = None,
+    model_config: ModelConfigOpt = None,
+) -> None:
+    """Play the later months through the live API: score, release chargebacks, watch drift and recall,
+    retrain and promote. Needs FRAUDGUARD_REPLAY_API_KEY (scopes score, labels, promote)."""
+    import logging  # noqa: PLC0415
+    import os  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+    from pymongo import MongoClient  # noqa: PLC0415
+
+    from fraudguard.config import load_monitoring_config  # noqa: PLC0415
+    from fraudguard.monitoring.replay import ReplayError, ReplayWorker  # noqa: PLC0415
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    key = os.environ.get("FRAUDGUARD_REPLAY_API_KEY")
+    if not key:
+        console.print(
+            "[red]Set FRAUDGUARD_REPLAY_API_KEY.[/] Create one with "
+            "`fraudguard db add-api-key replay-worker --scope score --scope labels --scope promote`."
+        )
+        raise typer.Exit(1)
+    settings = get_settings()
+    mongo: MongoClient[dict[str, Any]] = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=3000)
+    try:
+        with httpx.Client(base_url=api_url) as http:
+            worker = ReplayWorker(
+                http,
+                key,
+                mongo[settings.mongo_db],
+                data_cfg=load_data_config(config),
+                model_cfg=load_model_config(model_config),
+                mon_cfg=load_monitoring_config(),
+                settings=settings,
+            )
+            summary = worker.run(max_weeks=max_weeks)
+    except (ReplayError, httpx.HTTPError, SnapshotError) as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
+    finally:
+        mongo.close()
+
+    table = Table(title=f"Replay (baseline recall {summary.baseline_recall:.1%})", header_style="bold")
+    for col in ("week", "scored", "declined", "reviewed", "labels", "drift", "recall (week)", "retraining"):
+        table.add_column(col, justify="left" if col in {"week", "retraining"} else "right")
+    for w in summary.weeks:
+        table.add_row(
+            str(w.week),
+            f"{w.n_scored:,}",
+            str(w.decisions.get("decline", 0)),
+            str(w.decisions.get("review", 0)),
+            f"{w.labels_sent:,}",
+            "-" if w.drift_share is None else f"{w.drift_share:.0%}",
+            "-" if w.recall is None else f"{w.recall:.1%} (wk {w.recall_week})",
+            {"promoted": "promoted", "kept_champion": "kept", "skipped": "skipped"}.get(
+                w.retraining or "", ""
+            ),
+        )
+    console.print(table)
+    console.print(f"Champion after replay: v{summary.final_champion}. Took {summary.seconds:.0f}s.")
 
 
 if __name__ == "__main__":

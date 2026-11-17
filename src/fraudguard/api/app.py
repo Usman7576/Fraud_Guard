@@ -225,13 +225,25 @@ Analyst = Annotated[dict[str, Any], Depends(require(Role.ANALYST))]
 Admin = Annotated[dict[str, Any], Depends(require(Role.ADMIN))]
 
 
-async def api_client(state: State, x_api_key: Annotated[str | None, Header()] = None) -> str:
-    if not x_api_key:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing X-API-Key header")
-    doc = await state.db.api_keys.find_one({"key_hash": hash_api_key(x_api_key), "active": True})
-    if doc is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid API key")
-    return str(doc["name"])
+DEFAULT_SCOPES = ["score"]  # keys created before scopes existed can only score
 
 
-ApiClient = Annotated[str, Depends(api_client)]
+def require_key(scope: str) -> Callable[..., Any]:
+    """An active API key holding `scope` (score, labels or promote). Returns the key's name."""
+
+    async def check(state: State, x_api_key: Annotated[str | None, Header()] = None) -> str:
+        if not x_api_key:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing X-API-Key header")
+        doc = await state.db.api_keys.find_one({"key_hash": hash_api_key(x_api_key), "active": True})
+        if doc is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid API key")
+        if scope not in doc.get("scopes", DEFAULT_SCOPES):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"this API key lacks the {scope!r} scope")
+        return str(doc["name"])
+
+    return check
+
+
+ApiClient = Annotated[str, Depends(require_key("score"))]
+LabelFeed = Annotated[str, Depends(require_key("labels"))]
+Operator = Annotated[str, Depends(require_key("promote"))]

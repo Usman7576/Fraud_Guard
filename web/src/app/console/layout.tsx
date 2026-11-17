@@ -16,7 +16,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
           </Link>
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1 md:flex-none">
-              <ConsoleNav />
+              <ConsoleNav isAdmin={user?.role === "admin"} />
             </div>
             <form action="/api/auth/logout" method="post" className="md:hidden">
               <button type="submit" aria-label="Sign out" className="rounded-lg p-2 text-ink-2 hover:bg-surface-2">

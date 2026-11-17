@@ -1,0 +1,42 @@
+# Monitoring: the replay worker plays later months through the live API as if
+# they were production, releases chargebacks late, watches drift and recall, and
+# retrains when either slips. Run the API with FRAUDGUARD_SERVE_HISTORY_UNTIL=train
+# so the replayed months are new to it.
+
+replay:
+  # Transactions from this split onwards are replayed (validation then test).
+  start_split: validation
+  # Transactions per /score/batch call. Labels due before a batch are sent first,
+  # so a smaller batch keeps chargebacks closer to their exact arrival time.
+  batch_size: 250
+
+# A chargeback arrives this many days after the transaction (same as the graph features).
+label_delay_days: 30
+
+drift:
+  # Training rows sampled as the drift reference.
+  reference_rows: 20000
+  # Features monitored: the champion's most important ones by gain.
+  n_features: 30
+  # Retrain when more than this share of monitored features drift in a week.
+  share_threshold: 0.30
+  # Weeks with fewer transactions than this are reported but cannot trigger retraining.
+  min_rows: 200
+
+retraining:
+  # Retrain when weekly recall on labelled fraud falls this far below the
+  # champion's recall on the validation month.
+  recall_drop: 0.05
+  # At most one retraining per this many weeks.
+  min_weeks_between: 2
+  # The challenger trains on labelled data from this rolling window. Shorter
+  # windows follow recent fraud patterns more closely but train on less data.
+  window_days: 180
+  # The newest labelled days are held back: first for calibration, then for the
+  # champion-vs-challenger comparison (never used for fitting). Retraining waits
+  # until the comparison days lie after the champion's own training data.
+  calibration_days: 14
+  evaluation_days: 14
+  # Paired bootstrap over days on the evaluation window.
+  n_resamples: 300
+  confidence: 0.95

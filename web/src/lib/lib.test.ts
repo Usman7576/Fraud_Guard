@@ -67,7 +67,10 @@ describe("proxy", () => {
     expect(isAllowed("PATCH", "cases/123")).toBe(true);
     expect(isAllowed("POST", "score/preview")).toBe(true);
     expect(isAllowed("PUT", "policy")).toBe(false); // admin settings are not exposed here
-    expect(isAllowed("POST", "models/3/promote")).toBe(false);
+    expect(isAllowed("POST", "models/3/promote")).toBe(true); // the API itself requires the admin role
+    expect(isAllowed("POST", "ops/models/3/promote")).toBe(false); // machine-key route never via the browser
+    expect(isAllowed("POST", "labels")).toBe(false);
+    expect(isAllowed("GET", "monitoring/drift/24/report")).toBe(true);
     expect(isAllowed("GET", "cases/../policy")).toBe(false);
     expect(isAllowed("POST", "score")).toBe(false); // live scoring needs an API key, not a person
   });

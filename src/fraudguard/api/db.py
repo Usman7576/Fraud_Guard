@@ -111,6 +111,16 @@ COLLECTIONS: dict[str, tuple[Doc, list[IndexModel]]] = {
         [IndexModel([("txn_id", ASCENDING)], unique=True), IndexModel([("known_at", ASCENDING)])],
     ),
     "kpi_weekly": (_schema(["volume"], {"volume": INT}), []),
+    "drift_reports": (
+        _schema(["week", "n_rows", "drift_share"], {"week": INT, "n_rows": INT, "drift_share": NUM}),
+        [IndexModel([("week", ASCENDING)], unique=True)],
+    ),
+    "retraining_events": (
+        _schema(
+            ["week", "trigger", "outcome", "ts"], {"week": INT, "trigger": STR, "outcome": STR, "ts": DATE}
+        ),
+        [IndexModel([("ts", DESCENDING)])],
+    ),
     "audit_log": (
         _schema(["actor", "action", "ts"], {"actor": STR, "action": STR, "ts": DATE}),
         [IndexModel([("ts", DESCENDING)]), IndexModel([("actor", ASCENDING), ("ts", DESCENDING)])],

@@ -212,3 +212,59 @@ class Health(BaseModel):
     model_version: str
     transactions_in_memory: int
     latest_transaction_dt: int | None
+
+
+class LabelIn(BaseModel):
+    txn_id: int = Field(ge=0)
+    label: Literal[0, 1]
+    known_dt: int = Field(ge=0, description="TransactionDT-scale time at which the label became known.")
+
+
+class LabelsRequest(BaseModel):
+    labels: list[LabelIn] = Field(min_length=1, max_length=5000)
+
+
+class LabelsResponse(BaseModel):
+    stored: int
+    skipped_analyst: int
+    n_unknown: int
+    unknown: list[int] = Field(description="Up to 20 transaction IDs the API has not scored.")
+
+
+class DriftWeek(BaseModel):
+    week: int
+    week_start: datetime | None = None
+    week_start_dt: int | None = None
+    n_rows: int
+    n_features: int
+    n_drifted: int
+    drift_share: float
+    threshold: float | None = Field(default=None, description="Drift share that triggers retraining.")
+    top_drifted: list[str] = []
+    report_file: str | None = None
+
+
+class DriftColumn(BaseModel):
+    column: str
+    method: str
+    value: float
+    threshold: float
+    drifted: bool
+
+
+class DriftDetail(DriftWeek):
+    columns: list[DriftColumn]
+
+
+class RetrainingEvent(BaseModel):
+    week: int
+    week_start: datetime | None = None
+    ts: datetime
+    trigger: str
+    outcome: Literal["promoted", "kept_champion", "skipped"]
+    detail: str
+    drift_share: float | None = None
+    recall: float | None = None
+    champion_version: str | None = None
+    challenger_version: str | None = None
+    comparison: dict[str, Any] | None = None

@@ -8,13 +8,14 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi.responses import HTMLResponse
 from mlflow import MlflowClient
 from pydantic import BaseModel, Field
-from pymongo import ReturnDocument
+from pymongo import ReturnDocument, UpdateOne
 from pymongo.errors import BulkWriteError
 
 from fraudguard.api import db as dbm
-from fraudguard.api.app import Admin, Analyst, ApiClient, State
+from fraudguard.api.app import Admin, Analyst, ApiClient, LabelFeed, Operator, State
 from fraudguard.api.schemas import (
     BatchRequest,
     BatchResponse,
@@ -22,8 +23,12 @@ from fraudguard.api.schemas import (
     CasePage,
     CaseSummary,
     CaseUpdate,
+    DriftDetail,
+    DriftWeek,
     Health,
     KpiWeek,
+    LabelsRequest,
+    LabelsResponse,
     LoginRequest,
     Me,
     ModelVersion,
@@ -32,6 +37,7 @@ from fraudguard.api.schemas import (
     PreviewTransaction,
     ReasonOut,
     RefreshRequest,
+    RetrainingEvent,
     ScoreResponse,
     TokenResponse,
     Transaction,
@@ -53,6 +59,9 @@ scoring = APIRouter(tags=["scoring"])
 cases = APIRouter(prefix="/cases", tags=["cases"])
 kpi = APIRouter(prefix="/kpi", tags=["kpi"])
 admin = APIRouter(tags=["admin"])
+ops = APIRouter(prefix="/ops", tags=["operations"])
+labels = APIRouter(prefix="/labels", tags=["operations"])
+monitoring = APIRouter(prefix="/monitoring", tags=["monitoring"])
 health = APIRouter(tags=["health"])
 
 
@@ -432,7 +441,9 @@ def _versions(tracking_uri: str, serving: str) -> list[ModelVersion]:
         metrics: dict[str, float] = {}
         if mv.run_id:
             run = client.get_run(mv.run_id)
-            metrics = {k: v for k, v in run.data.metrics.items() if k.startswith(("valid_", "tuning_"))}
+            metrics = {
+                k: v for k, v in run.data.metrics.items() if k.startswith(("valid_", "tuning_", "eval_"))
+            }
         out.append(
             ModelVersion(
                 version=str(mv.version),
@@ -453,9 +464,8 @@ async def models(state: State, _: Admin) -> list[ModelVersion]:
     return await asyncio.to_thread(_versions, state.settings.mlflow_tracking_uri, state.scorer.version)
 
 
-@admin.post("/models/{version}/promote")
-async def promote(version: str, state: State, user: Admin) -> ModelVersion:
-    """Point the champion alias at another version (promotion or rollback) and serve it now; audited."""
+async def _promote(state: State, version: str, actor: str) -> ModelVersion:
+    """Point the champion alias at `version`, serve it immediately and audit who did it."""
     uri = state.settings.mlflow_tracking_uri
     client = MlflowClient(tracking_uri=uri)
     try:
@@ -470,13 +480,109 @@ async def promote(version: str, state: State, user: Admin) -> ModelVersion:
     state.scorer.swap_model(model, version)
     await dbm.audit(
         state.db,
-        user["username"],
+        actor,
         "model.promote",
         f"model:{champion.REGISTERED_NAME}",
         before={"version": before},
         after={"version": version},
     )
     return next(m for m in await asyncio.to_thread(_versions, uri, version) if m.version == version)
+
+
+@admin.post("/models/{version}/promote")
+async def promote(version: str, state: State, user: Admin) -> ModelVersion:
+    """Point the champion alias at another version (promotion or rollback) and serve it now; audited."""
+    return await _promote(state, version, user["username"])
+
+
+@ops.post("/models/{version}/promote")
+async def promote_by_worker(version: str, state: State, key: Operator) -> ModelVersion:
+    """Promotion by the retraining worker (API key with the promote scope); audited as that key."""
+    return await _promote(state, version, f"api_key:{key}")
+
+
+@labels.post("")
+async def post_labels(body: LabelsRequest, state: State, key: LabelFeed) -> LabelsResponse:
+    """Chargeback feed. Each label becomes known at `known_dt`: a fraud label marks the card in the live
+    graph from then on. Analyst verdicts are never overwritten."""
+    ids = [lab.txn_id for lab in body.labels]
+    cards = {
+        d["txn_id"]: d["card_uid"]
+        async for d in state.db.predictions.find({"txn_id": {"$in": ids}}, {"txn_id": 1, "card_uid": 1})
+    }
+    analyst = {d["txn_id"] async for d in state.db.labels.find({"txn_id": {"$in": ids}, "source": "analyst"})}
+    now = dbm.now()
+    writes: list[UpdateOne] = []
+    unknown: list[int] = []
+    for lab in body.labels:
+        card = cards.get(lab.txn_id)
+        if card is None:
+            unknown.append(lab.txn_id)
+            continue
+        if lab.txn_id in analyst:
+            continue
+        doc = {
+            "label": lab.label,
+            "source": "dataset",
+            "known_at": now,
+            "known_dt": lab.known_dt,
+            "card_uid": card,
+        }
+        writes.append(UpdateOne({"txn_id": lab.txn_id}, {"$set": doc}, upsert=True))
+        if lab.label == 1:
+            state.scorer.store.graph.mark_fraud(card, lab.known_dt)
+    if writes:
+        await state.db.labels.bulk_write(writes, ordered=False)
+    return LabelsResponse(
+        stored=len(writes), skipped_analyst=len(analyst), n_unknown=len(unknown), unknown=unknown[:20]
+    )
+
+
+# Monitoring -----------------------------------------------------------------------------------
+
+
+def _week_start(state: State, week: int) -> datetime:
+    ref = datetime.combine(state.data_cfg.reference_date, datetime.min.time())
+    return ref + timedelta(weeks=week)
+
+
+@monitoring.get("/drift")
+async def drift_weeks(state: State, _: Analyst) -> list[DriftWeek]:
+    """Weekly drift summaries written by the replay worker."""
+    return [
+        DriftWeek(**d, week_start=_week_start(state, d["week"]))
+        async for d in state.db.drift_reports.find({}, {"columns": 0}).sort("week", 1)
+    ]
+
+
+@monitoring.get("/drift/{week}")
+async def drift_week(week: int, state: State, _: Analyst) -> DriftDetail:
+    doc = await state.db.drift_reports.find_one({"week": week})
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no drift report for week {week}")
+    return DriftDetail(**doc, week_start=_week_start(state, week))
+
+
+@monitoring.get("/drift/{week}/report", response_class=HTMLResponse)
+async def drift_report_html(week: int, state: State, _: Analyst) -> HTMLResponse:
+    """The Evidently HTML report, served sandboxed: its scripts run, but not with the console's origin."""
+    doc = await state.db.drift_reports.find_one({"week": week}, {"report_file": 1})
+    name = (doc or {}).get("report_file")
+    base = (state.settings.reports_dir / "drift").resolve()
+    path = (base / str(name)).resolve() if name else None
+    if path is None or path.parent != base or not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no HTML report for week {week}")
+    html = await asyncio.to_thread(path.read_text, encoding="utf-8")
+    return HTMLResponse(html, headers={"Content-Security-Policy": "sandbox allow-scripts"})
+
+
+@monitoring.get("/retraining")
+async def retraining_events(state: State, _: Analyst) -> list[RetrainingEvent]:
+    """Retraining triggers, challengers and promotion decisions, newest first."""
+    return [
+        RetrainingEvent(**d, week_start=_week_start(state, d["week"]))
+        async for d in state.db.retraining_events.find().sort("ts", -1).limit(100)
+    ]
 
 
 @health.get("/health")
@@ -490,4 +596,4 @@ async def get_health(state: State) -> Health:
     )
 
 
-ROUTERS = [health, auth, scoring, cases, kpi, admin]
+ROUTERS = [health, auth, scoring, cases, kpi, admin, ops, labels, monitoring]

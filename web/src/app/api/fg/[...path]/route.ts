@@ -26,10 +26,11 @@ async function forward(req: NextRequest, { params }: Ctx): Promise<Response> {
   if (req.method !== "GET") init.body = await req.text();
   try {
     const res = await fetch(`${API_URL}${API_PREFIX}/${path}${req.nextUrl.search}`, init);
-    return new Response(await res.text(), {
-      status: res.status,
-      headers: { "Content-Type": res.headers.get("Content-Type") ?? "application/json" },
-    });
+    const headers: Record<string, string> = { "Content-Type": res.headers.get("Content-Type") ?? "application/json" };
+    // Drift reports are HTML with their own scripts: keep the API's sandbox so they never run as the console.
+    const csp = res.headers.get("Content-Security-Policy");
+    if (csp) headers["Content-Security-Policy"] = csp;
+    return new Response(await res.text(), { status: res.status, headers });
   } catch {
     return NextResponse.json({ detail: "The FraudGuard API is not reachable." }, { status: 503 });
   }

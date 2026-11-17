@@ -8,6 +8,9 @@ const ALLOWED: [method: string, pattern: RegExp][] = [
   ["GET", /^policy$/],
   ["POST", /^score\/preview$/],
   ["GET", /^auth\/me$/],
+  ["GET", /^monitoring\/drift\/\d+\/report$/],
+  // Admin-only on the API side; the proxy only forwards the person's own token.
+  ["POST", /^models\/\d+\/promote$/],
 ];
 
 /** Only the endpoints the console uses are reachable through the proxy. */

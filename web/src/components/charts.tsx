@@ -35,11 +35,14 @@ export function LineChart({
   format,
   height = 150,
   ariaLabel,
+  reference,
 }: {
   data: Point[];
   format: (v: number) => string;
   height?: number;
   ariaLabel: string;
+  /** A labelled horizontal line, e.g. a retraining threshold. */
+  reference?: { value: number; label: string };
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
@@ -47,7 +50,7 @@ export function LineChart({
   const w = Math.max(width - pad.left - pad.right, 10);
   const h = height - pad.top - pad.bottom;
   const values = data.map((d) => d.value).filter((v): v is number => v !== null);
-  const max = niceMax(Math.max(...values, 0));
+  const max = niceMax(Math.max(...values, reference?.value ?? 0, 0));
   const x = (i: number) => pad.left + (data.length <= 1 ? w / 2 : (i / (data.length - 1)) * w);
   const y = (v: number) => pad.top + h - (v / max) * h;
   const ticks = [0, max / 2, max];
@@ -107,11 +110,30 @@ export function LineChart({
             </g>
           ))}
           {data.map((d, i) =>
-            i === 0 || i === data.length - 1 || (data.length > 6 && i % Math.ceil(data.length / 5) === 0) ? (
+            i === 0 ||
+            i === data.length - 1 ||
+            // Interior labels every ~fifth of the axis, but never crowding the last one.
+            (data.length > 6 && i % Math.ceil(data.length / 5) === 0 && data.length - 1 - i >= Math.ceil(data.length / 5) / 2) ? (
               <text key={d.label + i} x={x(i)} y={height - 6} textAnchor="middle" className="fill-[var(--muted)] text-[10px]">
                 {d.label}
               </text>
             ) : null,
+          )}
+          {reference && (
+            <g>
+              <line
+                x1={pad.left}
+                x2={pad.left + w}
+                y1={y(reference.value)}
+                y2={y(reference.value)}
+                stroke="var(--critical)"
+                strokeWidth={1}
+                opacity={0.7}
+              />
+              <text x={pad.left + w + 4} y={y(reference.value)} dy="0.32em" className="fill-[var(--ink-2)] text-[10px]">
+                {reference.label}
+              </text>
+            </g>
           )}
           {segments.map((seg) => (
             <g key={linePath(seg)}>

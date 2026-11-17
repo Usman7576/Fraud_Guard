@@ -4,7 +4,7 @@ Cost-aware fraud detection for online card payments: a scoring API that chooses 
 
 Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) dataset (590,540 e-commerce transactions, 3.5% fraud). It is evaluated on future data, in money terms, with confidence intervals.
 
-> **Status:** week 7 of 10, Next.js analyst console: overview, review queue, case detail and score playground. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
+> **Status:** week 8 of 10, replay worker, Evidently drift monitoring and champion-challenger retraining. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
 
 ## Stack
 
@@ -250,6 +250,48 @@ Next.js 15 (App Router), React 19, TypeScript (strict), Tailwind CSS 4 and a few
 - A React effect returned the Promise that newer browsers give back from `scrollIntoView`.
 - Two reason texts were misleading. Round amounts were called "currency conversion", and D1 was labelled masked although its meaning (days since the card was first seen) is known.
 - The SHAP bars overflowed on phones.
+
+## Monitoring and retraining (week 8)
+
+```bash
+# 1. An API whose history ends with the training months, on its own database:
+FRAUDGUARD_SERVE_HISTORY_UNTIL=train FRAUDGUARD_MONGO_DB=fraudguard_replay uv run fraudguard serve
+# 2. A key for the worker (printed once), then replay the validation and test months:
+FRAUDGUARD_MONGO_DB=fraudguard_replay uv run fraudguard db add-api-key replay-worker --scope score --scope labels --scope promote
+FRAUDGUARD_MONGO_DB=fraudguard_replay FRAUDGUARD_REPLAY_API_KEY=... uv run fraudguard replay
+```
+
+The replay worker ([`monitoring/replay.py`](src/fraudguard/monitoring/replay.py)) plays later months through the **live API**, week by week, as if they were production. Settings are in [configs/monitoring.yaml](configs/monitoring.yaml).
+
+1. **Score.** Transactions go to `/score/batch` in batches of 250. Predictions and review cases are logged in MongoDB.
+2. **Chargebacks.** Before each batch, labels whose time has come (transaction time + 30 days) are sent to `POST /labels`. The live entity graph learns about fraud exactly as late as a merchant would. Analyst verdicts are never overwritten.
+3. **Drift.** Each week is compared with a sample of the training months on the champion's 30 most important features, using Evidently (K-S, chi-square, Wasserstein or Jensen-Shannon, chosen per column). The HTML report goes to `reports/drift/`, and a summary goes to the `drift_reports` collection.
+4. **Recall.** For the latest week whose chargebacks have all arrived, recall is the share of labelled fraud that was declined or reviewed.
+5. **Trigger.** Retraining starts when more than 30% of monitored features drift, or recall falls 5 points below the champion's validation recall. It runs at most once every 2 weeks.
+6. **Challenger.** LightGBM is refitted with the champion's tuned parameters on a 180-day window of labelled data. Its newest 14 days are held back for isotonic calibration, and the 14 days after those for the comparison. The challenger is logged to MLflow and registered with the `challenger` alias.
+7. **Promote.** Both models score the comparison days. A paired bootstrap over days measures the PR-AUC gain and the cost difference. The challenger is promoted (through `/ops/models/{v}/promote`, audited) only if the gain's lower bound is above zero **and** it costs no more.
+
+**Fair comparisons only.** Retraining waits until the comparison days lie *after* the champion's own training data. Otherwise the champion would be scored on rows it was fitted to. The first replay without this rule rejected every challenger, but for an unfair reason. The worker now logs "skipped: N more days needed" until a fair test is possible.
+
+**On the 20,000-row synthetic data** (validation and test months, 6,747 transactions over 10 weeks, 94–193 seconds):
+
+| | |
+|---|---|
+| Chargebacks | Arrive 30 days late, so recall is first measurable in week 6 of the replay: 89–100%, against 95.1% on validation |
+| Drift share | 50–77% every week. The synthetic data's lifetime counters grow with time (the same drift the week 3 adversarial validation found), so retraining was triggered at every allowed slot |
+| Decisions | Weeks 1–6: skipped (not enough new labels for a fair test). Weeks 7 and 9: challengers trained and **rejected**, with PR-AUC gain −0.047 [−0.086, −0.006] and −0.045 [−0.092, −0.007] |
+
+On this data, a model retrained on fewer, more recent rows does not beat the tuned champion, and the worker correctly keeps the champion. On real data, the drift trigger may need its own threshold. The point of the loop is that it measures before it promotes.
+
+**API additions.**
+- **Key scopes:** `score`, `labels` and `promote`. Existing keys can only score.
+- **Machine endpoints:** `POST /labels` and `POST /ops/models/{v}/promote`.
+- **Analyst read endpoints:** `GET /monitoring/drift`, `/monitoring/drift/{week}`, `/monitoring/drift/{week}/report` and `/monitoring/retraining`.
+- **Sandboxed reports:** the Evidently HTML is served with `Content-Security-Policy: sandbox allow-scripts`. Its scripts run in an opaque origin and cannot act as the signed-in analyst.
+
+**Console.**
+- **Monitoring:** drift share against the retraining line, recall as chargebacks arrive, the decision timeline with bootstrap intervals, and the weekly drift table with links to the Evidently reports.
+- **Models (admin only):** every registered version with its validation metrics and the challengers' measured gains. One click promotes or rolls back, and the API audits it.
 
 ## Development
 

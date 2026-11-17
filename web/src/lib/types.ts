@@ -94,3 +94,50 @@ export interface Health {
   transactions_in_memory: number;
   latest_transaction_dt: number | null;
 }
+
+export interface DriftWeek {
+  week: number;
+  week_start: string | null;
+  n_rows: number;
+  n_features: number;
+  n_drifted: number;
+  drift_share: number;
+  threshold: number | null;
+  top_drifted: string[];
+  report_file: string | null;
+}
+
+export interface Interval {
+  estimate: number;
+  low: number;
+  high: number;
+  n_valid: number;
+}
+
+export interface RetrainingEvent {
+  week: number;
+  week_start: string | null;
+  ts: string;
+  trigger: string;
+  outcome: "promoted" | "kept_champion" | "skipped";
+  detail: string;
+  drift_share: number | null;
+  recall: number | null;
+  champion_version: string | null;
+  challenger_version: string | null;
+  comparison: {
+    n_rows: number;
+    n_fraud: number;
+    pr_auc_gain: Interval;
+    cost_saved_per_10k: Interval;
+  } | null;
+}
+
+export interface ModelVersion {
+  version: string;
+  aliases: string[];
+  run_id: string | null;
+  created_at: string | null;
+  metrics: Record<string, number>;
+  serving: boolean;
+}
