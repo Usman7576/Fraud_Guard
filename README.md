@@ -4,7 +4,7 @@ Cost-aware fraud detection for online card payments: a scoring API that chooses 
 
 Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) dataset (590,540 e-commerce transactions, 3.5% fraud). It is evaluated on future data, in money terms, with confidence intervals.
 
-> **Status:** week 8 of 10, replay worker, Evidently drift monitoring and champion-challenger retraining. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
+> **Status:** week 9 of 10, public landing page with 3D scenes and a live scoring demo. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
 
 ## Stack
 
@@ -12,7 +12,7 @@ Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-dete
 |---|---|
 | ML and data | Python 3.12, Polars, LightGBM, Optuna, SHAP, MLflow, Evidently |
 | Backend | FastAPI, Pydantic v2, MongoDB |
-| Frontend | Next.js, React, TypeScript, Tailwind, shadcn/ui, React Three Fiber |
+| Frontend | Next.js, React, TypeScript, Tailwind, React Three Fiber, Framer Motion, GSAP |
 | Tooling | uv, Typer CLI, ruff, mypy, pytest, Hypothesis, GitHub Actions |
 
 Everything runs locally. There is no Docker and no GPU.
@@ -292,6 +292,44 @@ On this data, a model retrained on fewer, more recent rows does not beat the tun
 **Console.**
 - **Monitoring:** drift share against the retraining line, recall as chargebacks arrive, the decision timeline with bootstrap intervals, and the weekly drift table with links to the Evidently reports.
 - **Models (admin only):** every registered version with its validation metrics and the challengers' measured gains. One click promotes or rolls back, and the API audits it.
+
+## Landing page (week 9)
+
+```bash
+# A key for the web server's live demo (scope "demo" only: it scores and stores nothing).
+uv run fraudguard db add-api-key landing-demo --scope demo
+# Give it to the web server, e.g. in web/.env.local (git-ignored):
+#   FRAUDGUARD_DEMO_API_KEY=...
+cd web && npm run dev   # http://localhost:3000
+```
+
+The public page at `/` is always dark, because the 3D scenes glow and glow needs a dark surface. It has six sections:
+
+| Section | What the visitor sees | How it is built |
+|---|---|---|
+| **Hero** | A turning globe of payments. Most arcs pulse blue end to end; a few flash red and stop where a shield ring catches them. | React Three Fiber: shader points on a Fibonacci sphere, tube arcs with a travelling-pulse shader, a fresnel rim, bloom from `@react-three/postprocessing` |
+| **How it works** | Data, features, model, decision, revealed one after another | Framer Motion, staggered. The decision card quotes the live cost policy |
+| **Entity graph** | Cards, devices and emails. Scrolling lights a confirmed fraud card, then what it used (one hop), then the cards sharing those (two hops), while the camera moves in | drei `Float` and `Line`. GSAP ScrollTrigger scrubs the progress, and the steps beside the scene follow it |
+| **Live demo** | A payment form with presets. A 3D needle swings to the score on a log scale, then the decision and the top three reasons slide in | Real scoring through `POST /api/demo/score` (below) |
+| **Results** | Recall at 1% FPR, cost saved per 10,000 payments and PR-AUC, counting up, each with its 95% interval and the rules baseline | Read from `reports/evaluation.json` at build time. The page says when the figures come from the synthetic sample |
+| **Call to action** | Open the console, or read the code | Plain links |
+
+**The live demo.** The browser posts to the web server's `/api/demo/score`:
+- That route checks the request comes from the page's own origin and allows 10 tries a minute per visitor.
+- It holds the demo key server-side and calls `POST /api/v1/demo/score`.
+- The API endpoint needs a key with the `demo` scope and has its own limit (`FRAUDGUARD_DEMO_RATE_LIMIT_PER_MINUTE`, default 60).
+- It accepts only a few plain fields: amount, product, card network and type, email domain, device, and card age.
+- It scores them as a new card's first payment, right now, without storing anything. The card uses common issuer and billing values and a card number that never occurs in the data, so no real card's history is shown.
+
+The plan said the demo would call the real `/score`. That endpoint records the payment, updates the live features and can open a review case, so the demo uses a no-write endpoint instead.
+
+**Reason codes.** Features that read the same are now one reason (for example `TransactionAmt` and `amt_log` both say "amount of $849.00"), with their contributions added. This affects the API, the console and the evaluation report.
+
+**Performance and accessibility.**
+- The page's own JavaScript is about 170 kB. three.js and the scenes load with `next/dynamic` (`ssr: false`) once the browser is idle, so the text paints first.
+- Until then, and for good if WebGL is missing or the visitor prefers reduced motion, static SVG versions of the globe, graph and gauge are shown. With reduced motion, the graph section becomes a plain list and the counters show their final values.
+- The device pixel ratio is capped at 2, and each canvas stops rendering frames when it is off screen.
+- The frame-rate and Lighthouse targets from the plan have not been measured yet. That is part of week 10.
 
 ## Development
 

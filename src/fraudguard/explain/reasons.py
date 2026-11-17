@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 import polars as pl
@@ -180,17 +180,21 @@ class Reason:
 def reasons_for(
     contrib: np.ndarray, values: dict[str, object], feature_names: list[str], k: int
 ) -> list[Reason]:
-    """Up to `k` risk-raising reasons for one transaction, largest contribution first."""
-    order = [j for j in np.argsort(-contrib)[:k] if contrib[j] > 0]
-    return [
-        Reason(
-            feature_names[j],
-            values.get(feature_names[j]),
-            round(float(contrib[j]), 4),
-            describe(feature_names[j], values.get(feature_names[j])),
-        )
-        for j in order
-    ]
+    """Up to `k` risk-raising reasons for one transaction, largest contribution first.
+
+    Features that read the same (TransactionAmt and amt_log both say "amount of $849.00") are one
+    reason: their contributions are added and the larger feature names it."""
+    merged: dict[str, Reason] = {}
+    for j in np.argsort(-contrib):
+        if contrib[j] <= 0:
+            break
+        name = feature_names[j]
+        text = describe(name, values.get(name))
+        if (seen := merged.get(text)) is not None:
+            merged[text] = replace(seen, contribution=round(seen.contribution + float(contrib[j]), 4))
+        elif len(merged) < k:
+            merged[text] = Reason(name, values.get(name), round(float(contrib[j]), 4), text)
+    return sorted(merged.values(), key=lambda r: -r.contribution)
 
 
 def top_reasons(

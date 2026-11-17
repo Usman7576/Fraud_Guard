@@ -83,6 +83,47 @@ class PreviewTransaction(Transaction):
     TransactionDT: int | None = Field(default=None, ge=0)  # type: ignore[assignment]
 
 
+# The demo's card: common issuer and billing values, with a card1 that never occurs in the data, so
+# every demo payment is a new card's first and no real card's history is shown.
+DEMO_CARD: dict[str, Any] = {
+    "card1": 9501,
+    "card2": 321.0,
+    "card3": 150.0,
+    "card5": 226.0,
+    "addr1": 330.0,
+    "addr2": 87.0,
+}
+
+
+class DemoTransaction(BaseModel):
+    """The landing page's live demo: a few plain fields, scored as a new card's payment, now."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    TransactionAmt: float = Field(gt=0, le=10_000)
+    ProductCD: Literal["W", "C", "R", "H", "S"] = "W"
+    card4: Literal["visa", "mastercard", "american express", "discover"] = "visa"
+    card6: Literal["debit", "credit"] = "debit"
+    P_emaildomain: (
+        Literal["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "anonymous.com", "protonmail.com"]
+        | None
+    ) = None
+    DeviceType: Literal["desktop", "mobile"] | None = None
+    card_age_days: int = Field(default=0, ge=0, le=640, description="Days since the card's first use (D1).")
+
+    def row(self) -> dict[str, Any]:
+        fields = self.model_dump(exclude={"card_age_days"})
+        return PreviewTransaction(**DEMO_CARD, **fields, D1=float(self.card_age_days)).row()
+
+
+class DemoResponse(BaseModel):
+    probability: float
+    decision: Literal["approve", "review", "decline"]
+    reasons: list[ReasonOut]
+    model_version: str
+    latency_ms: float
+
+
 class BatchRequest(BaseModel):
     transactions: list[Transaction] = Field(min_length=1, max_length=1000)
 

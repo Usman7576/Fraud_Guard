@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { count, due, featureValue, money, percent } from "@/lib/format";
+import { RateWindow, fmt, gaugePosition, parseResults, tickLabel } from "@/lib/landing";
 import { isAllowed, sameOrigin } from "@/lib/proxy";
 import { EXPIRY_MARGIN_S, parseUser, safeNext, sessionCookies, tokenSubject } from "@/lib/session";
 
@@ -78,5 +79,53 @@ describe("proxy", () => {
     expect(sameOrigin("http://localhost:3000", "http://localhost:3000")).toBe(true);
     expect(sameOrigin("https://evil.example", "http://localhost:3000")).toBe(false);
     expect(sameOrigin(null, "http://localhost:3000")).toBe(false);
+  });
+});
+
+describe("landing", () => {
+  it("places scores on a log gauge", () => {
+    expect(gaugePosition(1e-4)).toBe(0);
+    expect(gaugePosition(0)).toBe(0);
+    expect(gaugePosition(0.01)).toBeCloseTo(0.5);
+    expect(gaugePosition(1)).toBe(1);
+    expect(gaugePosition(Number.NaN)).toBe(0);
+    expect(tickLabel(0.001)).toBe("0.1%");
+  });
+  it("formats result figures", () => {
+    expect(fmt(0.91667, "percent")).toBe("91.7%");
+    expect(fmt(-1102.4, "money")).toBe("-$1,102");
+    expect(fmt(0.88445, "decimal")).toBe("0.884");
+  });
+  it("limits each visitor per minute", () => {
+    const w = new RateWindow(2, 2);
+    expect([w.allow("a", 0), w.allow("a", 1), w.allow("a", 2)]).toEqual([true, true, false]);
+    expect(w.allow("a", 60_001)).toBe(true); // the window slid past the first two
+    w.allow("b", 60_002);
+    w.allow("c", 60_003); // evicts the least recently used visitor ("a")
+    expect(w.allow("a", 60_004)).toBe(true);
+  });
+  it("reads the evaluation report, or nothing", () => {
+    const iv = (estimate: number) => ({ estimate, low: estimate - 0.1, high: estimate + 0.1 });
+    const report = {
+      model_version: "5",
+      n_rows: 3362,
+      n_fraud: 108,
+      n_resamples: 1000,
+      policy: { false_decline_cost: 15, review_cost: 3, review_capacity_per_day: 200 },
+      intervals: {
+        model_recall_at_fpr: iv(0.9),
+        rules_recall_at_fpr: iv(0.8),
+        cost_saved_per_10k: iv(8900),
+        model_pr_auc: iv(0.88),
+        rules_pr_auc: iv(0.69),
+      },
+      shap_global: [["C1", 0.7], ["graph_2hop_fraud_cards", 0.6]],
+    };
+    const r = parseResults(report);
+    expect(r?.recall.estimate).toBe(0.9);
+    expect(r?.graphRank).toBe(2);
+    expect(r?.isSample).toBe(true);
+    expect(parseResults({ ...report, intervals: {} })).toBeNull();
+    expect(parseResults(null)).toBeNull();
   });
 });

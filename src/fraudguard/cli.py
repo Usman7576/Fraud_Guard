@@ -443,17 +443,18 @@ def db_add_api_key(
     name: Annotated[str, typer.Argument(help="Who uses the key, e.g. replay-worker.")],
     scope: Annotated[
         list[str] | None,
-        typer.Option(help="score, labels or promote; repeat for several (default: score)."),
+        typer.Option(help="score, labels, promote or demo; repeat for several (default: score)."),
     ] = None,
 ) -> None:
     """Create an API key. The key is shown once; only its hash is stored.
 
-    The replay worker needs all three scopes: --scope score --scope labels --scope promote."""
+    The replay worker needs --scope score --scope labels --scope promote. The web server's
+    landing-page demo needs only --scope demo (it scores without storing anything)."""
     from fraudguard.api import db  # noqa: PLC0415
     from fraudguard.api.security import new_api_key  # noqa: PLC0415
 
     scopes = sorted(set(scope or ["score"]))
-    if bad := [s for s in scopes if s not in {"score", "labels", "promote"}]:
+    if bad := [s for s in scopes if s not in {"score", "labels", "promote", "demo"}]:
         console.print(f"[red]unknown scope(s): {bad}[/]")
         raise typer.Exit(1)
     key, key_hash = new_api_key()

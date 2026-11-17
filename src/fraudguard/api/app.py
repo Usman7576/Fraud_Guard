@@ -80,6 +80,7 @@ class AppState:
     scorer: Scorer
     tokens: Tokens
     limiter: RateLimiter
+    demo_limiter: RateLimiter
     started_at: float = field(default_factory=time.time)
 
 
@@ -154,6 +155,7 @@ def create_app(
             scorer=Scorer(model, version, store, policy, model_cfg.explain.n_reasons),
             tokens=Tokens(secret, settings.access_token_minutes, settings.refresh_token_days),
             limiter=RateLimiter(settings.score_rate_limit_per_minute),
+            demo_limiter=RateLimiter(settings.demo_rate_limit_per_minute),
         )
         log.info("FraudGuard API ready: model v%s, policy %s", version, policy.as_dict())
         try:
@@ -229,7 +231,7 @@ DEFAULT_SCOPES = ["score"]  # keys created before scopes existed can only score
 
 
 def require_key(scope: str) -> Callable[..., Any]:
-    """An active API key holding `scope` (score, labels or promote). Returns the key's name."""
+    """An active API key holding `scope` (score, labels, promote or demo). Returns the key's name."""
 
     async def check(state: State, x_api_key: Annotated[str | None, Header()] = None) -> str:
         if not x_api_key:
@@ -247,3 +249,4 @@ def require_key(scope: str) -> Callable[..., Any]:
 ApiClient = Annotated[str, Depends(require_key("score"))]
 LabelFeed = Annotated[str, Depends(require_key("labels"))]
 Operator = Annotated[str, Depends(require_key("promote"))]
+DemoClient = Annotated[str, Depends(require_key("demo"))]

@@ -15,7 +15,7 @@ from pymongo import ReturnDocument, UpdateOne
 from pymongo.errors import BulkWriteError
 
 from fraudguard.api import db as dbm
-from fraudguard.api.app import Admin, Analyst, ApiClient, LabelFeed, Operator, State
+from fraudguard.api.app import Admin, Analyst, ApiClient, DemoClient, LabelFeed, Operator, State
 from fraudguard.api.schemas import (
     BatchRequest,
     BatchResponse,
@@ -23,6 +23,8 @@ from fraudguard.api.schemas import (
     CasePage,
     CaseSummary,
     CaseUpdate,
+    DemoResponse,
+    DemoTransaction,
     DriftDetail,
     DriftWeek,
     Health,
@@ -63,6 +65,7 @@ ops = APIRouter(prefix="/ops", tags=["operations"])
 labels = APIRouter(prefix="/labels", tags=["operations"])
 monitoring = APIRouter(prefix="/monitoring", tags=["monitoring"])
 health = APIRouter(tags=["health"])
+demo = APIRouter(prefix="/demo", tags=["demo"])
 
 
 # Auth -----------------------------------------------------------------------------------------
@@ -232,6 +235,19 @@ async def score_batch(
     results = _score_all(state, body.transactions)
     tasks.add_task(_persist, state, results)
     return BatchResponse(results=[_response(r) for r, _ in results])
+
+
+@demo.post("/score")
+async def demo_score(txn: DemoTransaction, state: State, key: DemoClient) -> DemoResponse:
+    """The public landing page's live demo, called by the web server with a demo-scoped key.
+
+    Scored like a what-if: nothing is stored and online state is unchanged."""
+    if not state.demo_limiter.allow(key):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "demo rate limit exceeded")
+    row = txn.row()
+    row["TransactionDT"] = state.scorer.store.last_dt or 0
+    r = _response(state.scorer.score(row, record=False))
+    return DemoResponse(**r.model_dump(include=set(DemoResponse.model_fields)))
 
 
 # Cases ----------------------------------------------------------------------------------------
@@ -596,4 +612,4 @@ async def get_health(state: State) -> Health:
     )
 
 
-ROUTERS = [health, auth, scoring, cases, kpi, admin, ops, labels, monitoring]
+ROUTERS = [health, auth, scoring, demo, cases, kpi, admin, ops, labels, monitoring]

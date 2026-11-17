@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     refresh_token_days: int = Field(default=7, ge=1)
     cors_origins: list[str] = ["http://localhost:3000"]
     score_rate_limit_per_minute: int = Field(default=6000, ge=1)
+    # The public landing-page demo shares one key, so it gets its own, much tighter limit.
+    demo_rate_limit_per_minute: int = Field(default=60, ge=1)
     # History loaded into the online feature store at startup: every split up to and including this one.
     serve_history_until: Literal["train", "validation", "test"] = "validation"
     api_host: str = "127.0.0.1"

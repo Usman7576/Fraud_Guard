@@ -79,6 +79,33 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
+/* The public landing page is always dark: the 3D scenes glow, and glow needs a dark surface.
+   Same hues as the console's dark theme, on a deeper page colour. */
+.landing {
+  color-scheme: dark;
+  --page: #07090d;
+  --surface: #0e1117;
+  --surface-2: #161a22;
+  --ink: #f0efec;
+  --ink-2: #c3c2b7;
+  --muted: #8d8c86;
+  --line: #232835;
+  --axis: #333845;
+  --ring: rgba(255, 255, 255, 0.1);
+  --accent: #3987e5;
+  --accent-ink: #ffffff;
+  --accent-soft: #13233a;
+  --good: #0ca30c;
+  --good-ink: #2fc42f;
+  --warning: #fab219;
+  --warning-ink: #fab219;
+  --critical: #d03b3b;
+  --critical-ink: #e66767;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  background: var(--page);
+  color: var(--ink);
+}
+
 @theme inline {
   --color-page: var(--page);
   --color-surface: var(--surface);

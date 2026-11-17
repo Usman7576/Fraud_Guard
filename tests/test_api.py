@@ -288,6 +288,53 @@ def test_preview_changes_nothing(env: Env) -> None:
     assert db.predictions.count_documents({}) == n_predictions
 
 
+def test_demo_needs_its_scope_stores_nothing_and_is_rate_limited(env: Env) -> None:
+    db = MongoClient(MONGO_URI)[env.settings.mongo_db]
+    key, key_hash = new_api_key()
+    db.api_keys.insert_one({"name": "landing", "key_hash": key_hash, "active": True, "scopes": ["demo"]})
+    demo = {"X-API-Key": key}
+    txn = {
+        "TransactionAmt": 849.0,
+        "ProductCD": "C",
+        "P_emaildomain": "anonymous.com",
+        "DeviceType": "mobile",
+    }
+
+    assert (
+        env.client.post(f"{API}/demo/score", json=txn, headers=env.api).status_code == 403
+    )  # score-only key
+    assert (
+        env.client.post(
+            f"{API}/score", json=txn | {"TransactionID": 1, "TransactionDT": 1}, headers=demo
+        ).status_code
+        == 403
+    )
+    assert env.client.post(f"{API}/demo/score", json=txn | {"card1": 4242}, headers=demo).status_code == 422
+    assert (
+        env.client.post(f"{API}/demo/score", json=txn | {"P_emaildomain": "x.com"}, headers=demo).status_code
+        == 422
+    )
+
+    before, n_predictions = env.client.get(f"{API}/health").json(), db.predictions.count_documents({})
+    r = env.client.post(f"{API}/demo/score", json=txn, headers=demo)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {"probability", "decision", "reasons", "model_version", "latency_ms"}
+    assert 0 <= body["probability"] <= 1 and len(body["reasons"]) == 3
+    assert env.client.get(f"{API}/health").json() == before
+    assert (
+        db.predictions.count_documents({}) == n_predictions and db.cases.count_documents({"txn_id": 0}) == 0
+    )
+
+    state = env.client.app.state.fg  # type: ignore[attr-defined]
+    limit, state.demo_limiter.per_minute = state.demo_limiter.per_minute, 2
+    try:
+        codes = [env.client.post(f"{API}/demo/score", json=txn, headers=demo).status_code for _ in range(3)]
+    finally:
+        state.demo_limiter.per_minute = limit
+    assert codes[-1] == 429
+
+
 def test_restart_restores_state_and_policy(env: Env) -> None:
     before = env.client.get(f"{API}/health").json()
     with TestClient(create_app(*env.app_args)) as again:

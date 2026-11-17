@@ -113,6 +113,14 @@ class TestReasons:
         assert [r.feature for r in out[1]] == ["card_is_new"]
         assert out[1][0].text == "card seen before"
 
+    def test_features_that_read_the_same_are_one_reason(self) -> None:
+        df = pl.DataFrame({"TransactionAmt": [849.0], "amt_log": [np.log1p(849.0)], "D1": [0.0], "C1": [3.0]})
+        contrib = np.array([[0.9, 0.4, 0.6, 0.5]])
+        out = reasons.top_reasons(contrib, df, df.columns, k=3)[0]
+        assert [r.text for r in out] == ["amount of $849.00", "card first seen today", out[2].text]
+        assert out[0].feature == "TransactionAmt" and out[0].contribution == 1.3
+        assert out[2].feature == "C1"
+
     def test_global_importance_ranks_by_mean_absolute_value(self) -> None:
         contrib = np.array([[0.1, -2.0], [0.1, 2.0]])
         assert [n for n, _ in reasons.global_importance(contrib, ["a", "b"])] == ["b", "a"]
