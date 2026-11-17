@@ -76,6 +76,13 @@ class Transaction(BaseModel):
         return data
 
 
+class PreviewTransaction(Transaction):
+    """A what-if transaction. TransactionID and TransactionDT default to "a new one, now"."""
+
+    TransactionID: int = Field(default=0, ge=0)
+    TransactionDT: int | None = Field(default=None, ge=0)  # type: ignore[assignment]
+
+
 class BatchRequest(BaseModel):
     transactions: list[Transaction] = Field(min_length=1, max_length=1000)
 
@@ -95,6 +102,12 @@ class ScoreResponse(BaseModel):
     model_version: str
     latency_ms: float
     case_opened: bool
+
+
+class PreviewResponse(ScoreResponse):
+    transaction_dt: int
+    features: dict[str, Any]
+    contributions: list[tuple[str, float]]
 
 
 class BatchResponse(BaseModel):

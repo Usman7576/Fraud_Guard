@@ -155,10 +155,14 @@ class OnlineFeatureStore:
         return out
 
     # Public API ---------------------------------------------------------------
-    def features(self, row: Row) -> Row:
-        """Every engineered feature for `row`, computed from strictly earlier transactions."""
+    def features(self, row: Row, *, peek: bool = False) -> Row:
+        """Every engineered feature for `row`, computed from strictly earlier transactions.
+
+        With `peek=True` nothing in the store changes (a "what if" for the playground): the
+        time-order check, the graph's pending same-second updates and label releases are skipped."""
         dt, amount = int(row[DT]), float(row[AMOUNT])
-        self._advance(dt)
+        if not peek:
+            self._advance(dt)
         day, hour, weekday = self._clock(dt)
         uid = card_uid(row, day)
         out: Row = {

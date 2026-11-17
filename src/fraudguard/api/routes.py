@@ -28,6 +28,8 @@ from fraudguard.api.schemas import (
     Me,
     ModelVersion,
     PolicyModel,
+    PreviewResponse,
+    PreviewTransaction,
     ReasonOut,
     RefreshRequest,
     ScoreResponse,
@@ -192,6 +194,23 @@ async def score(txn: Transaction, state: State, client: ApiClient, tasks: Backgr
     results = _score_all(state, [txn])
     tasks.add_task(_persist, state, results)
     return _response(results[0][0])
+
+
+@scoring.post("/score/preview")
+async def score_preview(txn: PreviewTransaction, state: State, _: Analyst) -> PreviewResponse:
+    """What-if scoring for the console playground: nothing is stored and online state is unchanged.
+
+    Without a TransactionDT the transaction is placed at the latest time the API has seen."""
+    row = txn.row()
+    if row["TransactionDT"] is None:
+        row["TransactionDT"] = state.scorer.store.last_dt or 0
+    r = state.scorer.score(row, record=False)
+    return PreviewResponse(
+        **(_response(r).model_dump() | {"case_opened": False}),
+        transaction_dt=r.dt,
+        features=r.features,
+        contributions=r.contributions,
+    )
 
 
 @scoring.post("/score/batch")

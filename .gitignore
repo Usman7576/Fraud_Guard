@@ -35,3 +35,6 @@ out/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local editor/assistant settings
+.claude/

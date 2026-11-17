@@ -52,11 +52,24 @@ def _plural(n: float, word: str) -> str:
     return f"{n:.0f} {word}{suffix}"
 
 
+def _cents(c: float) -> str:
+    """Round prices end in .00 or .x0; three-decimal cents usually come from a currency conversion."""
+    if c == 0:
+        return "round amount (no cents)"
+    if round(c, 2) != round(c, 3):
+        return f"amount ends in {f'{c:.3f}'[1:]}, a fraction of a cent (typical of currency conversion)"
+    return f"amount ends in .{round(c * 100):02d}"
+
+
 # feature -> (label used when the value is missing, formatter for a present value)
 TEMPLATES: dict[str, tuple[str, Formatter]] = {
     "TransactionAmt": ("amount", lambda v: f"amount of ${_num(v):,.2f}"),
     "amt_log": ("amount", lambda v: f"amount of ${math.expm1(_num(v)):,.2f}"),
-    "amt_cents": ("cents", lambda v: f"amount has {_num(v):.3f} in cents (typical of currency conversion)"),
+    "amt_cents": ("cents", lambda v: _cents(_num(v))),
+    "D1": (
+        "card age",
+        lambda v: f"card first seen {_plural(_num(v), 'day')} ago" if _num(v) else "card first seen today",
+    ),
     "hour": ("time of day", lambda v: f"made at {int(_num(v)):02d}:{int(_num(v) % 1 * 60):02d}"),
     "weekday": ("weekday", lambda v: f"made on a {WEEKDAYS.get(int(_num(v)), '?')}"),
     "ProductCD": ("product code", lambda v: f"product code {v}"),
@@ -140,7 +153,9 @@ def describe(feature: str, value: object) -> str:
         if missing:
             return f"no {alias} recorded for a {window} activity check"
         if kind == "cnt":
-            return f"{_plural(_num(value), 'earlier transaction')} on {who} in the last {window}"
+            n = _num(value)
+            what = "no earlier transactions" if n == 0 else _plural(n, "earlier transaction")
+            return f"{what} on {who} in the last {window}"
         return f"${_num(value):,.0f} spent on {who} in the last {window}"
     for pattern, kind_label in MASKED:
         if pattern.match(feature):

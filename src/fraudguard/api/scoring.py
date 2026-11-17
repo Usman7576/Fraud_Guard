@@ -52,10 +52,11 @@ class Scorer:
     def swap_model(self, model: FraudModel, version: str) -> None:
         self.model, self.version = model, version
 
-    def score(self, txn: dict[str, Any]) -> ScoreResult:
+    def score(self, txn: dict[str, Any], *, record: bool = True) -> ScoreResult:
+        """Score a transaction. `record=False` is a what-if that leaves online state untouched."""
         start = time.perf_counter()
         model = self.model  # one consistent model even if an admin promotes another mid-request
-        feats = self.store.features(txn)
+        feats = self.store.features(txn, peek=not record)
         values = {**txn, **feats}
         x = model.vector([values])
         contrib_full = np.asarray(model.booster.predict(x, pred_contrib=True))[0]
@@ -64,9 +65,10 @@ class Scorer:
         p = float(model.calibrator.predict(np.array([raw]))[0])
         day = int(txn[DT]) // SECONDS_PER_DAY
         action = decide_one(p, float(txn[AMOUNT]), self.policy, self.reviews_by_day[day])
-        if action == Action.REVIEW:
-            self.reviews_by_day[day] += 1
-        self.store.add(txn)
+        if record:
+            if action == Action.REVIEW:
+                self.reviews_by_day[day] += 1
+            self.store.add(txn)
         reasons = reasons_for(contrib, values, model.feature_names, self.n_reasons)
         top = np.argsort(-np.abs(contrib))[:N_CASE_CONTRIBUTIONS]
         return ScoreResult(

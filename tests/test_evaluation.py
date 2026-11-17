@@ -92,6 +92,15 @@ class TestReasons:
         assert "masked" in reasons.describe("V258", 1.0)
         assert reasons.describe("id_31", None).endswith("missing (meaning masked by the data provider)")
         assert reasons.describe("something_new", 3) == "something_new is 3"
+        assert (
+            reasons.describe("vel_device_7d_cnt", 0)
+            == "no earlier transactions on this device in the last 7d"
+        )
+        assert reasons.describe("amt_cents", 0.0) == "round amount (no cents)"
+        assert reasons.describe("amt_cents", 0.99) == "amount ends in .99"
+        assert reasons.describe("amt_cents", 0.418).startswith("amount ends in .418, a fraction of a cent")
+        assert reasons.describe("D1", 0.0) == "card first seen today"
+        assert reasons.describe("D1", 14.0) == "card first seen 14 days ago"
 
     def test_only_risk_raising_features_are_reasons(self) -> None:
         df = pl.DataFrame(

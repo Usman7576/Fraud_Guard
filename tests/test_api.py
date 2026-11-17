@@ -263,6 +263,31 @@ def test_policy_and_models_are_admin_only_and_audited(env: Env) -> None:
     assert db.audit_log.count_documents({"action": {"$in": ["policy.update", "model.promote"]}}) == 2
 
 
+def test_preview_changes_nothing(env: Env) -> None:
+    analyst = env.token("ana")
+    db = MongoClient(MONGO_URI)[env.settings.mongo_db]
+    before, n_predictions = env.client.get(f"{API}/health").json(), db.predictions.count_documents({})
+    txn = {
+        "TransactionAmt": 1999.0,
+        "card1": 4242,
+        "addr1": 300.0,
+        "P_emaildomain": "anonymous.com",
+        "D1": 0.0,
+    }
+    assert (
+        env.client.post(f"{API}/score/preview", json=txn, headers=env.api).status_code == 401
+    )  # people only
+    r = env.client.post(f"{API}/score/preview", json=txn, headers=analyst)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["transaction_dt"] == before["latest_transaction_dt"] and not body["case_opened"]
+    assert 0 <= body["probability"] <= 1 and body["features"]["card_is_new"] is True
+    again = env.client.post(f"{API}/score/preview", json=txn, headers=analyst).json()
+    assert again["probability"] == body["probability"]  # repeatable: the first preview left no trace
+    assert env.client.get(f"{API}/health").json() == before
+    assert db.predictions.count_documents({}) == n_predictions
+
+
 def test_restart_restores_state_and_policy(env: Env) -> None:
     before = env.client.get(f"{API}/health").json()
     with TestClient(create_app(*env.app_args)) as again:

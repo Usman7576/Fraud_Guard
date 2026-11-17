@@ -4,7 +4,7 @@ Cost-aware fraud detection for online card payments: a scoring API that chooses 
 
 Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) dataset (590,540 e-commerce transactions, 3.5% fraud). It is evaluated on future data, in money terms, with confidence intervals.
 
-> **Status:** week 6 of 10, FastAPI scoring service on MongoDB with online features, cases, KPIs and auth. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
+> **Status:** week 7 of 10, Next.js analyst console: overview, review queue, case detail and score playground. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
 
 ## Stack
 
@@ -217,6 +217,40 @@ So a restart loses nothing, and this is tested. Predictions, transactions and ne
 
 **Security.** Passwords are hashed with Argon2id, and unknown usernames take as long to reject as wrong passwords. Access and refresh tokens are not interchangeable. API keys are stored only as hashes and rate-limited per key. CORS only allows the console origin. Admin actions (policy, promotion, verdicts, user and key creation) go to `audit_log`.
 
+## Analyst console (week 7)
+
+```bash
+cd web
+npm install
+npm run dev          # http://localhost:3000 (the API must be running: uv run fraudguard serve)
+```
+
+Next.js 15 (App Router), React 19, TypeScript (strict), Tailwind CSS 4 and a few hand-written UI primitives in the shadcn/ui style. There is no component library and no chart library: the charts are small SVG components.
+
+| Page | What an analyst does there |
+|---|---|
+| **Overview** | Latest week's volume, decline and review rates, recall on labelled fraud and cost per 10,000, each with a sparkline. Below that, a weekly trend chart per measure, with a hover crosshair and a table view. |
+| **Review queue** | Open cases sorted by risk, amount or deadline, filtered by status and minimum risk. Each row shows a risk meter, the amount, the top two reasons and the SLA. Keyboard triage: `j`/`k` to move, `Enter` to open. |
+| **Case detail** | The three reasons in plain words, and SHAP contributions as diverging bars (red raises risk, blue lowers it, and the direction is also written out). Also the transaction facts, the card's entity neighbourhood (devices, addresses and emails, with confirmed-fraud links ringed in red and counted), notes, and the **Fraud / Genuine** verdict. The verdict closes the case and writes a label. |
+| **Score playground** | A what-if form with presets. The calibrated probability is shown on a gauge, with the decision, the reasons and the contributions. It calls `POST /api/v1/score/preview`, which stores nothing and leaves the live feature state untouched. |
+
+**Auth.** The browser never holds a token:
+- Signing in goes through a Next.js route handler, which keeps the JWTs in `httpOnly`, `SameSite=Lax` cookies.
+- Middleware guards `/console`. It refreshes the access token shortly before it expires and passes the new one to the same request.
+- Interactive calls go through `/api/fg/*`. This proxy adds the bearer token, forwards only the endpoints the console uses (it does not forward admin policy changes or live `/score`), and refuses cross-site writes.
+- Post-login redirects only accept same-site paths.
+
+**Design.**
+- One accent colour, neutral surfaces, and light and dark themes chosen separately.
+- Decisions and statuses always pair colour with an icon and a word.
+- Chart colours come from a palette validated for colour-blind readers. Lines are 2px, gridlines hairline, and text uses ink colours rather than series colours.
+- The layout works down to phone width.
+
+**Checked in a browser** against a throwaway database with the test month scored through the API (172 review cases). Sign-in redirects, KPI charts and tooltips, keyboard triage, assigning, a note and a fraud verdict, the playground, dark mode and a 375px phone layout all work. That check found and fixed three problems:
+- A React effect returned the Promise that newer browsers give back from `scrollIntoView`.
+- Two reason texts were misleading. Round amounts were called "currency conversion", and D1 was labelled masked although its meaning (days since the card was first seen) is known.
+- The SHAP bars overflowed on phones.
+
 ## Development
 
 ```bash
@@ -225,4 +259,5 @@ uv run ruff check .      # lint
 uv run ruff format .     # format
 uv run mypy              # type-check (strict)
 uv run pre-commit install
+cd web && npm run lint && npm run typecheck && npm test && npm run build
 ```
