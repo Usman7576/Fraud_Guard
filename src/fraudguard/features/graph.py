@@ -17,6 +17,7 @@ could not have had at the time.
 
 from __future__ import annotations
 
+import heapq
 from collections import Counter, defaultdict, deque
 
 import polars as pl
@@ -91,14 +92,33 @@ class EntityGraph:
         self.entity_cards: dict[tuple[str, str], set[str]] = defaultdict(set)
         self.card_fraud_known: Counter[str] = Counter()
         self.fraud_cards: set[str] = set()
-        self.pending: deque[tuple[int, str]] = deque()  # (label known at, card), in time order
+        self.pending: list[tuple[int, str]] = []  # heap of (label known at, card)
 
     def release_labels(self, now: int) -> None:
         """Labels whose chargeback has arrived by `now` become known."""
         while self.pending and self.pending[0][0] <= now:
-            _, card = self.pending.popleft()
+            _, card = heapq.heappop(self.pending)
             self.card_fraud_known[card] += 1
             self.fraud_cards.add(card)
+
+    def mark_fraud(self, card: str, known_at: int) -> None:
+        """A fraud label that becomes known at `known_at` (an analyst verdict or a chargeback)."""
+        heapq.heappush(self.pending, (known_at, card))
+
+    def neighbourhood(self, card: str) -> dict[str, list[dict[str, object]]]:
+        """The card's devices and addresses, with how many cards and known-fraud cards share each."""
+        links = self.card_links.get(card)
+        out: dict[str, list[dict[str, object]]] = {}
+        for etype in ("device", "address", "email"):
+            out[etype] = [
+                {
+                    "id": ent,
+                    "cards": len(self._members(etype, ent)),
+                    "fraud_cards": len((self._members(etype, ent) & self.fraud_cards) - {card}),
+                }
+                for ent in sorted(links[etype] if links else ())
+            ]
+        return out
 
     def _members(self, etype: str, ent: str) -> set[str]:
         return self.entity_cards.get((etype, ent)) or set()
@@ -156,7 +176,7 @@ class EntityGraph:
                     self.recent_events[(etype, ent)].append((dt, card))
                     self.recent_cards[(etype, ent)][card] += 1
         if is_fraud:
-            self.pending.append((dt + self.delay, card))
+            self.mark_fraud(card, dt + self.delay)
 
 
 def build(df: pl.DataFrame, cfg: FeatureConfig) -> pl.DataFrame:

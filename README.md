@@ -4,7 +4,7 @@ Cost-aware fraud detection for online card payments: a scoring API that chooses 
 
 Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) dataset (590,540 e-commerce transactions, 3.5% fraud). It is evaluated on future data, in money terms, with confidence intervals.
 
-> **Status:** week 5 of 10, final test-month evaluation with confidence intervals, ablation and SHAP reason codes. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
+> **Status:** week 6 of 10, FastAPI scoring service on MongoDB with online features, cases, KPIs and auth. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
 
 ## Stack
 
@@ -164,6 +164,58 @@ IEEE-CIS's masked columns (C, D, M, V, id_) are described as masked rather than 
 - Costs are assumptions, not merchant data (see the sensitivity analysis).
 - `card_uid` approximates a card; a real deployment would use a tokenised card ID.
 - Results hold for this merchant mix and period. The drift monitoring (week 8) measures how fast they degrade.
+
+## Scoring API on MongoDB (week 6)
+
+```bash
+uv run fraudguard db init                        # collections, JSON-schema validators, indexes
+uv run fraudguard db add-user alice --role admin # prompts for a password (Argon2id hash stored)
+uv run fraudguard db add-api-key replay-worker   # prints a key once; only its SHA-256 is stored
+uv run fraudguard serve                          # http://localhost:8000/docs
+```
+
+MongoDB runs as the local Windows service (`mongodb://localhost:27017`, database `fraudguard`). Browse it in Compass.
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| POST | `/api/v1/score` | API key | Score one transaction: calibrated probability, approve / review / decline, top three reasons, model version |
+| POST | `/api/v1/score/batch` | API key | Up to 1,000 transactions in time order |
+| POST | `/api/v1/auth/login`, `/refresh` | public / refresh token | 15-minute access token, 7-day refresh token (JWT, HS256) |
+| GET | `/api/v1/cases` | analyst | Review queue: filter by status, probability, amount and assignee; sort; paginate |
+| GET / PATCH | `/api/v1/cases/{txn_id}` | analyst | Detail with features, SHAP contributions and the card's entity neighbourhood; assign, note, verdict |
+| GET | `/api/v1/kpi/weekly` | analyst | Volume, decline and review rates, recall on labelled fraud, cost, p95 latency |
+| GET / PUT | `/api/v1/policy` | analyst / admin | Cost assumptions and review capacity; changes apply immediately and are audited |
+| GET / POST | `/api/v1/models`, `/models/{v}/promote` | admin | Registry versions with validation metrics; promote or roll back (audited) |
+| GET | `/api/v1/health` | public | Model version, transactions in memory, MongoDB ping |
+
+**Online features** ([`features/online.py`](src/fraudguard/features/online.py)). The live scorer uses the same definitions as training:
+- Velocity windows use sorted timestamps with prefix sums, with lookups by binary search over `[t − window, t)`.
+- Behaviour uses the card's earlier amounts and times of day.
+- The graph is the same `EntityGraph` class used in training.
+
+Rows in the same second never see each other: velocity and behaviour exclude equal timestamps, and graph updates are buffered until a later second arrives. The **parity test** replays the test month through the store and compares every engineered feature with the offline snapshot. On the 20,000-row synthetic data it finds **0 mismatches** across 3,362 transactions × 39 engineered features plus the card ID, at 0.1 ms per transaction. A second test goes end to end: it scores the test month through the HTTP API and checks that the probabilities equal the model's on the offline features.
+
+**Latency.** On a laptop, scoring a transaction takes 2.3 ms at p95 inside the API: online features, LightGBM, exact SHAP and the decision. Over HTTP, p95 is 12.2 ms per `/score` request (280 requests, API-key lookup and MongoDB writes included). The target was 50 ms. The API test asserts the server-side p95 stays under 50 ms.
+
+**State and storage.** For speed, the online state lives in the API's memory. At startup it is rebuilt from:
+- the feature snapshot (history up to `FRAUDGUARD_SERVE_HISTORY_UNTIL`);
+- every live transaction in the `transactions` collection;
+- analyst fraud verdicts in `labels`.
+
+So a restart loses nothing, and this is tested. Predictions, transactions and new cases are written in a background task after the response is sent, so a slow insert never delays a decision. A **review** decision opens a case with a 24-hour SLA. An analyst's verdict closes it and writes a label. A fraud verdict also marks the card as known fraud in the graph straight away.
+
+| Collection | Holds | Indexes |
+|---|---|---|
+| `predictions` | txn, time, model version, probability, decision, reasons, latency | txn (unique), time, model version + time |
+| `transactions` | raw request rows, for rebuilding online state | txn (unique), time |
+| `cases` | status, assignee, verdict, notes, features, SHAP, SLA | txn (unique), status + probability, assignee + status |
+| `labels` | label, source (dataset or analyst), when it became known | txn (unique), known_at |
+| `kpi_weekly` | weekly KPIs, written by an aggregation with `$lookup` and `$percentile` | week |
+| `users`, `api_keys`, `audit_log`, `policy` | access and admin history | username / key hash (unique), time |
+
+**Live capacity.** Offline, a day's review candidates are ranked by how much review saves. Live, the system can't see the rest of the day, so reviews are first come, first served until the daily capacity is used. Overflow cases get the cheaper of approve and decline.
+
+**Security.** Passwords are hashed with Argon2id, and unknown usernames take as long to reject as wrong passwords. Access and refresh tokens are not interchangeable. API keys are stored only as hashes and rate-limited per key. CORS only allows the console origin. Admin actions (policy, promotion, verdicts, user and key creation) go to `audit_log`.
 
 ## Development
 

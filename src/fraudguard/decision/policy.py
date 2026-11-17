@@ -83,6 +83,18 @@ def decide(p: np.ndarray, amount: np.ndarray, day: np.ndarray, policy: Policy) -
     return apply_review_capacity(actions, saving, np.asarray(day), policy.review_capacity_per_day, no_review)
 
 
+def decide_one(p: float, amount: float, policy: Policy, reviews_used_today: int) -> Action:
+    """Live version of `decide`: reviews are first come, first served until the day's capacity is used.
+
+    Offline evaluation ranks a whole day's review candidates by saving; a live
+    system cannot see the rest of the day, so it fills the queue in arrival order."""
+    costs = expected_costs(np.array([p]), np.array([amount]), policy)[0]
+    best = Action(int(np.argmin(costs)))
+    if best == Action.REVIEW and reviews_used_today >= policy.review_capacity_per_day:
+        return Action.APPROVE if costs[Action.APPROVE] <= costs[Action.DECLINE] else Action.DECLINE
+    return best
+
+
 def decline_threshold(amount: float, policy: Policy) -> float:
     """Calibrated probability above which declining beats approving, for a given amount."""
     c_fd = policy.false_decline_cost

@@ -46,6 +46,25 @@ class FraudModel:
             raise KeyError(f"input is missing model features: {missing[:10]}")
         return to_matrix(df, self.feature_names, self.encoder)
 
+    def vector(self, rows: list[dict[str, Any]]) -> np.ndarray:
+        """Feature matrix from plain dicts, encoded exactly like `matrix` (used by the live API)."""
+        if not hasattr(self, "_codes"):
+            self._codes = {
+                c: {v: float(i) for i, v in enumerate(lv)} for c, lv in self.encoder.levels.items()
+            }
+        out = np.full((len(rows), len(self.feature_names)), np.nan, dtype=np.float32)
+        for i, row in enumerate(rows):
+            for j, col in enumerate(self.feature_names):
+                v = row.get(col)
+                if v is None:
+                    continue
+                codes = self._codes.get(col)
+                if codes is not None:
+                    out[i, j] = codes.get(str(v), float(len(codes)))
+                else:
+                    out[i, j] = float(v)
+        return out
+
     def raw_score(self, df: pl.DataFrame) -> np.ndarray:
         return np.asarray(self.booster.predict(self.matrix(df)))
 

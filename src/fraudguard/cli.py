@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
@@ -34,6 +35,8 @@ app.add_typer(data_app, name="data")
 app.add_typer(features_app, name="features")
 app.add_typer(report_app, name="report")
 app.add_typer(train_app, name="train")
+db_app = typer.Typer(help="MongoDB: collections, users and API keys.", no_args_is_help=True)
+app.add_typer(db_app, name="db")
 console = Console()
 
 ConfigOpt = Annotated[Path | None, typer.Option("--config", help="Path to a data config YAML.")]
@@ -341,6 +344,119 @@ def report_adversarial(
     for name, share in result.top_features[:5]:
         console.print(f"  {name:<28} {share:>6.1%}")
     console.print(f"Report written to {json_path.parent}")
+
+
+@app.command()
+def serve(
+    host: Annotated[str | None, typer.Option(help="Bind address (default from settings).")] = None,
+    port: Annotated[int | None, typer.Option(help="Port (default from settings).")] = None,
+    reload: Annotated[bool, typer.Option(help="Restart on code changes (development).")] = False,
+) -> None:
+    """Run the scoring API (OpenAPI docs at /docs)."""
+    import uvicorn  # noqa: PLC0415
+
+    settings = get_settings()
+    uvicorn.run(
+        "fraudguard.api.main:app",
+        host=host or settings.api_host,
+        port=port or settings.api_port,
+        reload=reload,
+        log_level=settings.log_level.lower(),
+    )
+
+
+def _run_db(fn: Callable[[Any], Awaitable[Any]]) -> Any:
+    """Run an async function against the configured database."""
+    import asyncio  # noqa: PLC0415
+
+    from pymongo import AsyncMongoClient  # noqa: PLC0415
+
+    settings = get_settings()
+
+    async def go() -> Any:
+        client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
+            settings.mongo_uri, serverSelectionTimeoutMS=3000
+        )
+        try:
+            await client.admin.command("ping")
+            return await fn(client[settings.mongo_db])
+        finally:
+            await client.close()
+
+    try:
+        return asyncio.run(go())
+    except Exception as exc:
+        if type(exc).__name__ == "ServerSelectionTimeoutError":
+            console.print(
+                f"[red]Cannot reach MongoDB at {settings.mongo_uri}.[/] Is the MongoDB service running?"
+            )
+            raise typer.Exit(1) from exc
+        raise
+
+
+@db_app.command("init")
+def db_init() -> None:
+    """Create collections with JSON-schema validators and indexes (safe to rerun)."""
+    from fraudguard.api import db  # noqa: PLC0415
+
+    names = _run_db(db.init_db)
+    console.print(f"[green]Ready:[/] {', '.join(names)} in database [bold]{get_settings().mongo_db}[/]")
+
+
+@db_app.command("add-user")
+def db_add_user(
+    username: str,
+    role: Annotated[str, typer.Option(help="analyst or admin")] = "analyst",
+    password: Annotated[
+        str, typer.Option(prompt=True, hide_input=True, confirmation_prompt=True, help="Prompted if omitted.")
+    ] = "",
+) -> None:
+    """Create a console user, or reset an existing user's password and role."""
+    from fraudguard.api import db  # noqa: PLC0415
+    from fraudguard.api.security import Role, hash_password  # noqa: PLC0415
+
+    if role not in {r.value for r in Role}:
+        console.print("[red]role must be analyst or admin[/]")
+        raise typer.Exit(1)
+    if len(password) < 10:
+        console.print("[red]Use a password of at least 10 characters.[/]")
+        raise typer.Exit(1)
+
+    async def go(database: Any) -> None:
+        await db.init_db(database)
+        await database.users.update_one(
+            {"username": username},
+            {
+                "$set": {"password_hash": hash_password(password), "role": role, "active": True},
+                "$setOnInsert": {"created_at": db.now()},
+            },
+            upsert=True,
+        )
+        await db.audit(database, "cli", "user.upsert", f"user:{username}", after={"role": role})
+
+    _run_db(go)
+    console.print(f"[green]User[/] {username} ({role}) saved")
+
+
+@db_app.command("add-api-key")
+def db_add_api_key(
+    name: Annotated[str, typer.Argument(help="Who uses the key, e.g. replay-worker.")],
+) -> None:
+    """Create an API key for /score. The key is shown once; only its hash is stored."""
+    from fraudguard.api import db  # noqa: PLC0415
+    from fraudguard.api.security import new_api_key  # noqa: PLC0415
+
+    key, key_hash = new_api_key()
+
+    async def go(database: Any) -> None:
+        await db.init_db(database)
+        doc = {"name": name, "key_hash": key_hash, "active": True, "created_at": db.now()}
+        await database.api_keys.insert_one(doc)
+        await db.audit(database, "cli", "api_key.create", f"api_key:{name}")
+
+    _run_db(go)
+    console.print(f"API key for [bold]{name}[/] (shown once, store it safely):")
+    console.print(key, markup=False, highlight=False)
 
 
 if __name__ == "__main__":

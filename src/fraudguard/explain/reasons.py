@@ -162,22 +162,27 @@ class Reason:
         return asdict(self)
 
 
+def reasons_for(
+    contrib: np.ndarray, values: dict[str, object], feature_names: list[str], k: int
+) -> list[Reason]:
+    """Up to `k` risk-raising reasons for one transaction, largest contribution first."""
+    order = [j for j in np.argsort(-contrib)[:k] if contrib[j] > 0]
+    return [
+        Reason(
+            feature_names[j],
+            values.get(feature_names[j]),
+            round(float(contrib[j]), 4),
+            describe(feature_names[j], values.get(feature_names[j])),
+        )
+        for j in order
+    ]
+
+
 def top_reasons(
     contrib: np.ndarray, df: pl.DataFrame, feature_names: list[str], k: int
 ) -> list[list[Reason]]:
-    """Up to `k` risk-raising reasons per row, largest contribution first."""
-    rows = df.select(feature_names).rows()
-    out = []
-    for i, row in enumerate(rows):
-        c = contrib[i]
-        order = [j for j in np.argsort(-c)[:k] if c[j] > 0]
-        out.append(
-            [
-                Reason(feature_names[j], row[j], round(float(c[j]), 4), describe(feature_names[j], row[j]))
-                for j in order
-            ]
-        )
-    return out
+    """Up to `k` risk-raising reasons per row of `df`."""
+    return [reasons_for(contrib[i], row, feature_names, k) for i, row in enumerate(df.iter_rows(named=True))]
 
 
 def explain(model: FraudModel, df: pl.DataFrame, k: int = 3) -> list[list[Reason]]:

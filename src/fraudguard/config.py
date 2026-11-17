@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     mlflow_tracking_uri: str = f"sqlite:///{(PROJECT_ROOT / 'mlflow.db').as_posix()}"
     mlflow_experiment: str = "fraudguard"
+
+    # API. Without a JWT secret a random one is generated at startup (tokens die with the process).
+    jwt_secret: SecretStr | None = None
+    access_token_minutes: int = Field(default=15, ge=1)
+    refresh_token_days: int = Field(default=7, ge=1)
+    cors_origins: list[str] = ["http://localhost:3000"]
+    score_rate_limit_per_minute: int = Field(default=6000, ge=1)
+    # History loaded into the online feature store at startup: every split up to and including this one.
+    serve_history_until: Literal["train", "validation", "test"] = "validation"
+    api_host: str = "127.0.0.1"
+    api_port: int = 8000
 
 
 class Paths(BaseModel):
