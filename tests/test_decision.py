@@ -4,13 +4,14 @@ import numpy as np
 import pytest
 
 from fraudguard.config import DecisionConfig
-from fraudguard.decision import analysis
+from fraudguard.decision import analysis, explorer
 from fraudguard.decision.policy import (
     Action,
     Policy,
     adjust_odds,
     apply_review_capacity,
     decide,
+    decide_one,
     decline_threshold,
     realised_cost,
 )
@@ -124,3 +125,35 @@ def test_multiplier_grid_always_contains_one() -> None:
     assert 1.0 in grid.tolist()
     with pytest.raises(ValueError, match=r"include 1\.0"):
         DecisionConfig.model_validate({"risk_multipliers": {"min": 2, "max": 3, "n": 4}})
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        POLICY,
+        Policy(false_decline_cost=40.0, review_cost=1.0, review_capacity_per_day=100, risk_multiplier=0.5),
+        Policy(false_decline_cost=5.0, review_cost=10.0, review_capacity_per_day=100, risk_multiplier=2.0),
+    ],
+)
+def test_implied_thresholds_match_the_decision_rule(policy: Policy) -> None:
+    grid = np.linspace(0.0005, 0.9995, 2000)
+    for t in explorer.implied_thresholds(policy):
+        actions = [decide_one(float(p), t.amount, policy, reviews_used_today=0) for p in grid]
+        first_act = next((p for p, a in zip(grid, actions, strict=True) if a != Action.APPROVE), 1.0)
+        first_decline = next((p for p, a in zip(grid, actions, strict=True) if a == Action.DECLINE), 1.0)
+        assert first_act == pytest.approx(t.act_from, abs=6e-4), t
+        assert first_decline == pytest.approx(t.decline_from, abs=6e-4), t
+        assert t.act_from <= t.decline_from
+
+
+def test_explorer_simulates_and_sweeps_the_false_decline_cost() -> None:
+    rng = np.random.default_rng(3)
+    y = rng.random(4000) < 0.04
+    p = np.clip(np.where(y, rng.beta(5, 2, y.size), rng.beta(1, 30, y.size)), 0, 1)
+    scored = explorer.Scored(p=p, y=y, amount=rng.lognormal(4, 1, y.size), day=np.arange(y.size) // 400)
+    cost = explorer.simulate(scored, POLICY)
+    assert cost == realised_cost(decide(p, scored.amount, scored.day, POLICY), y, scored.amount, POLICY)
+    curve = explorer.false_decline_curve(scored, POLICY)
+    assert [c.false_decline_cost for c in curve] == list(explorer.CURVE_FALSE_DECLINE_COSTS)
+    # Pricier false declines mean fewer declines.
+    assert curve[-1].decline_rate < curve[0].decline_rate

@@ -2,6 +2,7 @@ import { LogOut, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 
 import { ConsoleNav } from "./nav";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { currentUser } from "@/lib/api";
 
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
@@ -18,6 +19,9 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
             <div className="min-w-0 flex-1 md:flex-none">
               <ConsoleNav isAdmin={user?.role === "admin"} />
             </div>
+            <div className="md:hidden">
+              <ThemeToggle />
+            </div>
             <form action="/api/auth/logout" method="post" className="md:hidden">
               <button type="submit" aria-label="Sign out" className="rounded-lg p-2 text-ink-2 hover:bg-surface-2">
                 <LogOut aria-hidden className="size-4" />
@@ -25,6 +29,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
             </form>
           </div>
           <div className="mt-auto hidden border-t border-line pt-3 md:block">
+            <ThemeToggle />
             {user ? (
               <div className="px-2 pb-2 text-xs">
                 <div className="font-medium text-ink">{user.username}</div>

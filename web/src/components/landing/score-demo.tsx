@@ -20,7 +20,7 @@ import {
   type DemoResult,
 } from "@/lib/landing";
 
-import { use3DMode, useOnScreen } from "./use-3d";
+import { use3DMode, useViewport, useWebGL } from "./use-3d";
 
 function SvgGauge({ value }: { value: number }) {
   const angle = Math.PI - value * Math.PI;
@@ -51,10 +51,11 @@ const GaugeScene = dynamic(() => import("./gauge-scene"), { ssr: false });
 
 function Gauge({ value }: { value: number }) {
   const mode = use3DMode();
-  const [ref, onScreen] = useOnScreen<HTMLDivElement>();
+  const { ref, onScreen, near } = useViewport<HTMLDivElement>();
+  const webgl = useWebGL(mode === "3d" && near);
   return (
     <div ref={ref} className="aspect-[15/8] w-full">
-      {mode === "3d" ? <GaugeScene value={value} active={onScreen} /> : <SvgGauge value={value} />}
+      {webgl ? <GaugeScene value={value} active={onScreen} /> : <SvgGauge value={value} />}
     </div>
   );
 }

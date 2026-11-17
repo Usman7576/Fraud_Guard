@@ -36,6 +36,7 @@ export function LineChart({
   height = 150,
   ariaLabel,
   reference,
+  marker,
 }: {
   data: Point[];
   format: (v: number) => string;
@@ -43,6 +44,8 @@ export function LineChart({
   ariaLabel: string;
   /** A labelled horizontal line, e.g. a retraining threshold. */
   reference?: { value: number; label: string };
+  /** A labelled vertical line at a data index, e.g. the value a slider is set to. */
+  marker?: { index: number; label: string };
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
@@ -132,6 +135,20 @@ export function LineChart({
               />
               <text x={pad.left + w + 4} y={y(reference.value)} dy="0.32em" className="fill-[var(--ink-2)] text-[10px]">
                 {reference.label}
+              </text>
+            </g>
+          )}
+          {marker && marker.index >= 0 && marker.index < data.length && (
+            <g>
+              <line x1={x(marker.index)} x2={x(marker.index)} y1={pad.top} y2={pad.top + h} stroke="var(--ink-2)" strokeWidth={1} opacity={0.6} />
+              <text
+                x={x(marker.index)}
+                y={pad.top - 2}
+                textAnchor={marker.index > data.length * 0.75 ? "end" : "start"}
+                dx={marker.index > data.length * 0.75 ? -4 : 4}
+                className="fill-[var(--ink-2)] text-[10px]"
+              >
+                {marker.label}
               </text>
             </g>
           )}

@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { Activity, Boxes, FlaskConical, Inbox, LayoutDashboard } from "lucide-react";
+import { Activity, Boxes, Calculator, FlaskConical, Inbox, LayoutDashboard, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -11,6 +11,8 @@ const ITEMS = [
   { href: "/console/playground", label: "Score playground", icon: FlaskConical, exact: false, admin: false },
   { href: "/console/monitoring", label: "Monitoring", icon: Activity, exact: false, admin: false },
   { href: "/console/models", label: "Models", icon: Boxes, exact: false, admin: true },
+  { href: "/console/cost", label: "Cost explorer", icon: Calculator, exact: false, admin: true },
+  { href: "/console/settings", label: "Settings", icon: Settings, exact: false, admin: true },
 ];
 
 export function ConsoleNav({ isAdmin = false }: { isAdmin?: boolean }) {

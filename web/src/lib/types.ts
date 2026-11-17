@@ -141,3 +141,61 @@ export interface ModelVersion {
   metrics: Record<string, number>;
   serving: boolean;
 }
+
+export interface Cost {
+  n: number;
+  total: number;
+  per_10k: number;
+  fraud_loss: number;
+  false_decline_cost: number;
+  review_cost: number;
+  decline_rate: number;
+  review_rate: number;
+  fraud_caught: number;
+  fraud_amount_caught: number;
+  false_decline_rate: number;
+}
+
+export interface Simulation {
+  split: "validation";
+  model_version: string;
+  n_rows: number;
+  n_fraud: number;
+  proposed: Cost;
+  current: Cost;
+  curve: { false_decline_cost: number; per_10k: number; decline_rate: number; review_rate: number; fraud_caught: number }[];
+  thresholds: { amount: number; act_from: number; decline_from: number }[];
+}
+
+export type Role = "analyst" | "admin";
+export type Scope = "score" | "labels" | "promote" | "demo";
+
+export interface User {
+  username: string;
+  role: Role;
+  active: boolean;
+  created_at: string | null;
+}
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  scopes: string[];
+  active: boolean;
+  created_at: string | null;
+}
+
+export interface AuditEntry {
+  id: string;
+  actor: string;
+  action: string;
+  target: string | null;
+  before: unknown;
+  after: unknown;
+  ts: string;
+}
+
+export interface AuditPage {
+  entries: AuditEntry[];
+  next_before: string | null;
+}

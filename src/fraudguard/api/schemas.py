@@ -239,6 +239,100 @@ class PolicyModel(BaseModel):
     risk_multiplier: float = Field(gt=0)
 
 
+Scope = Literal["score", "labels", "promote", "demo"]
+USERNAME = r"^[a-z0-9][a-z0-9_.-]{2,31}$"
+
+
+class UserOut(BaseModel):
+    username: str
+    role: Literal["analyst", "admin"]
+    active: bool
+    created_at: datetime | None = None
+
+
+class UserCreate(BaseModel):
+    username: str = Field(pattern=USERNAME, description="3-32 characters: a-z, 0-9, _ . -")
+    role: Literal["analyst", "admin"] = "analyst"
+    password: str = Field(min_length=10, max_length=128)
+
+
+class UserUpdate(BaseModel):
+    role: Literal["analyst", "admin"] | None = None
+    active: bool | None = None
+    password: str | None = Field(default=None, min_length=10, max_length=128)
+
+
+class ApiKeyOut(BaseModel):
+    id: str
+    name: str
+    scopes: list[str]
+    active: bool
+    created_at: datetime | None = None
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_. -]*$")
+    scopes: list[Scope] = Field(min_length=1)
+
+
+class ApiKeyCreated(ApiKeyOut):
+    key: str = Field(description="Shown once. Only its hash is stored.")
+
+
+class AuditEntry(BaseModel):
+    id: str
+    actor: str
+    action: str
+    target: str | None = None
+    before: Any = None
+    after: Any = None
+    ts: datetime
+
+
+class AuditPage(BaseModel):
+    entries: list[AuditEntry]
+    next_before: datetime | None = Field(description="Pass as `before` for the next (older) page.")
+
+
+class CostOut(BaseModel):
+    n: int
+    total: float
+    per_10k: float
+    fraud_loss: float
+    false_decline_cost: float
+    review_cost: float
+    decline_rate: float
+    review_rate: float
+    fraud_caught: float
+    fraud_amount_caught: float
+    false_decline_rate: float
+
+
+class CurvePointOut(BaseModel):
+    false_decline_cost: float
+    per_10k: float
+    decline_rate: float
+    review_rate: float
+    fraud_caught: float
+
+
+class ThresholdOut(BaseModel):
+    amount: float
+    act_from: float = Field(description="Lowest calibrated probability that is reviewed or declined.")
+    decline_from: float = Field(description="Lowest calibrated probability that is declined.")
+
+
+class SimulateResponse(BaseModel):
+    split: Literal["validation"] = "validation"
+    model_version: str
+    n_rows: int
+    n_fraud: int
+    proposed: CostOut
+    current: CostOut
+    curve: list[CurvePointOut]
+    thresholds: list[ThresholdOut]
+
+
 class ModelVersion(BaseModel):
     version: str
     aliases: list[str]

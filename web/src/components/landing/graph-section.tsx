@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 
 import { StaticGraph } from "./static-art";
-import { COLORS, use3DMode, useOnScreen } from "./use-3d";
+import { COLORS, use3DMode, useViewport, useWebGL } from "./use-3d";
 
 const GraphScene = dynamic(() => import("./graph-scene"), { ssr: false, loading: () => <StaticGraph /> });
 
@@ -66,7 +66,8 @@ export function GraphSection({ graphRank }: { graphRank: number | null }) {
   const section = useRef<HTMLElement>(null);
   const progress = useRef(0);
   const [step, setStep] = useState(0);
-  const [canvasRef, onScreen] = useOnScreen<HTMLDivElement>();
+  const { ref: canvasRef, onScreen, near } = useViewport<HTMLDivElement>();
+  const webgl = useWebGL(mode === "3d" && near);
 
   useEffect(() => {
     if (mode !== "3d" || !section.current) return;
@@ -153,7 +154,7 @@ export function GraphSection({ graphRank }: { graphRank: number | null }) {
           </div>
         </div>
         <div ref={canvasRef} className="min-h-0 flex-1">
-          {mode === "3d" ? <GraphScene progress={progress} active={onScreen} /> : <StaticGraph />}
+          {webgl ? <GraphScene progress={progress} active={onScreen} /> : <StaticGraph />}
         </div>
       </div>
     </section>

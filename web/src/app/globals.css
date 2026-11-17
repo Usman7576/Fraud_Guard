@@ -106,6 +106,80 @@
   color: var(--ink);
 }
 
+/* Landing hero on phones: the SVG globe, animated with CSS (no WebGL). */
+@keyframes fg-pulse {
+  from {
+    stroke-dashoffset: 0.24;
+  }
+  to {
+    stroke-dashoffset: -1;
+  }
+}
+@keyframes fg-fraud {
+  0% {
+    stroke-dashoffset: 0.62;
+    opacity: 1;
+  }
+  45% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  70%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+@keyframes fg-shield {
+  0%,
+  44% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  46% {
+    opacity: 1;
+  }
+  75%,
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+@keyframes fg-ring {
+  from {
+    transform: rotate(-5deg);
+  }
+  to {
+    transform: rotate(5deg);
+  }
+}
+.fg-pulse {
+  stroke-dasharray: 0.24 1.24;
+  animation: fg-pulse 3s linear infinite;
+}
+.fg-fraud {
+  stroke-dasharray: 0.62 1;
+  animation: fg-fraud 3.4s ease-out infinite;
+}
+.fg-shield {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: fg-shield 3.4s ease-out infinite;
+}
+.fg-ring {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: fg-ring 7s ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fg-pulse,
+  .fg-fraud,
+  .fg-shield,
+  .fg-ring {
+    animation: none;
+  }
+}
+
 @theme inline {
   --color-page: var(--page);
   --color-surface: var(--surface);

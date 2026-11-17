@@ -1,5 +1,6 @@
-// Static stand-ins for the 3D scenes: shown first, and kept when WebGL is missing or the visitor
-// prefers reduced motion. Same palette and the same story, without motion.
+// SVG stand-ins for the 3D scenes: shown first, kept when WebGL is missing or the visitor prefers
+// reduced motion, and used (with CSS animation) for the hero on phones, where WebGL start-up would
+// block the main thread for seconds. Same palette and the same story.
 import { COLORS } from "./use-3d";
 
 function project(lat: number, lon: number, r: number): [number, number, number] {
@@ -32,36 +33,70 @@ const ARCS: { d: string; fraud?: boolean }[] = [
   { d: "M-140,-10 Q-60,80 30,120" },
 ];
 
-export function StaticGlobe() {
+/** `animated`: payment pulses travel the arcs and the fraud pulse is caught by the shield (CSS only). */
+export function StaticGlobe({ animated = false }: { animated?: boolean }) {
+  // Two stacked layers: the dots never change, so only the small arc layer repaints while it
+  // animates (it gets its own compositing layer).
   return (
-    <svg viewBox="-200 -200 400 400" className="size-full" aria-hidden>
-      <defs>
-        <radialGradient id="fg-glow" r="0.5">
-          <stop offset="0.72" stopColor={COLORS.accent} stopOpacity="0" />
-          <stop offset="0.8" stopColor={COLORS.accent} stopOpacity="0.28" />
-          <stop offset="1" stopColor={COLORS.accent} stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      <circle r="190" fill="url(#fg-glow)" />
-      {DOTS.map(([x, y, z], i) => (
-        <circle key={i} cx={x} cy={y} r={1.4} fill={COLORS.accentBright} opacity={0.12 + z * 0.45} />
-      ))}
-      {ARCS.map((a) => (
-        <path
-          key={a.d}
-          d={a.d}
+    <div className="relative size-full" aria-hidden>
+      <svg viewBox="-200 -200 400 400" className="absolute inset-0 size-full">
+        <defs>
+          <radialGradient id="fg-glow" r="0.5">
+            <stop offset="0.72" stopColor={COLORS.accent} stopOpacity="0" />
+            <stop offset="0.8" stopColor={COLORS.accent} stopOpacity="0.28" />
+            <stop offset="1" stopColor={COLORS.accent} stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <circle r="190" fill="url(#fg-glow)" />
+        {DOTS.map(([x, y, z], i) => (
+          <circle key={i} cx={x} cy={y} r={1.4} fill={COLORS.accentBright} opacity={0.12 + z * 0.45} />
+        ))}
+      </svg>
+      <svg viewBox="-200 -200 400 400" className="absolute inset-0 size-full" style={animated ? { willChange: "transform" } : undefined}>
+        {ARCS.map((a, i) =>
+          animated ? (
+            <g key={a.d}>
+              {!a.fraud && <path d={a.d} fill="none" stroke={COLORS.accent} strokeOpacity={0.22} strokeWidth={1.2} />}
+              <path
+                d={a.d}
+                fill="none"
+                stroke={a.fraud ? COLORS.critical : COLORS.accentBright}
+                strokeWidth={a.fraud ? 2.2 : 1.8}
+                strokeLinecap="round"
+                pathLength={1}
+                className={a.fraud ? "fg-fraud" : "fg-pulse"}
+                // Pulses are staggered; the fraud arc keeps the default timing, shared with the shield.
+                style={a.fraud ? undefined : { animationDelay: `${(i * 0.73) % 3}s`, animationDuration: `${2.6 + (i % 3) * 0.5}s` }}
+              />
+            </g>
+          ) : (
+            <path
+              key={a.d}
+              d={a.d}
+              fill="none"
+              stroke={a.fraud ? COLORS.critical : COLORS.accent}
+              strokeWidth={a.fraud ? 2 : 1.5}
+              strokeLinecap="round"
+              pathLength={1}
+              strokeDasharray={a.fraud ? "0.62 1" : undefined}
+            />
+          ),
+        )}
+        {/* the fraud arc is stopped by the shield ring */}
+        <circle
+          cx={10}
+          cy={12}
+          r={9}
           fill="none"
-          stroke={a.fraud ? COLORS.critical : COLORS.accent}
-          strokeWidth={a.fraud ? 2 : 1.5}
-          strokeLinecap="round"
-          pathLength={1}
-          strokeDasharray={a.fraud ? "0.62 1" : undefined}
+          stroke={COLORS.accentBright}
+          strokeWidth={1.5}
+          className={animated ? "fg-shield" : undefined}
         />
-      ))}
-      {/* the fraud arc is stopped by the shield ring */}
-      <circle cx={10} cy={12} r={9} fill="none" stroke={COLORS.accentBright} strokeWidth={1.5} />
-      <ellipse rx="196" ry="46" fill="none" stroke={COLORS.accentBright} strokeOpacity={0.4} transform="rotate(-14)" />
-    </svg>
+        <g className={animated ? "fg-ring" : undefined}>
+          <ellipse rx="196" ry="46" fill="none" stroke={COLORS.accentBright} strokeOpacity={0.4} transform="rotate(-14)" />
+        </g>
+      </svg>
+    </div>
   );
 }
 

@@ -4,7 +4,22 @@ Cost-aware fraud detection for online card payments: a scoring API that chooses 
 
 Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) dataset (590,540 e-commerce transactions, 3.5% fraud). It is evaluated on future data, in money terms, with confidence intervals.
 
-> **Status:** week 9 of 10, public landing page with 3D scenes and a live scoring demo. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
+> **Status:** all 10 weeks built: data, features, model, evaluation, API, console, monitoring, landing page and end-to-end tests. The full plan is in [docs/FraudGuard_Project_Plan.pdf](docs/FraudGuard_Project_Plan.pdf).
+
+## Results
+
+Measured on the **test month**, which nothing was tuned on. Intervals are 95% bootstrap intervals over whole days (1,000 resamples), and differences against the rules are paired.
+
+| | LightGBM + cost policy | Hand-written rules |
+|---|---:|---:|
+| PR-AUC | **0.884** [0.828, 0.939] | 0.694 [0.591, 0.791] |
+| Fraud caught at a 1% false-positive rate | **91.7%** [86.2%, 96.4%] | 84.3% [40.0%, 90.3%] |
+| Cost per 10,000 payments | **$3,829** [2,091, 6,428] | $12,748 [9,676, 16,752] |
+| Saving against the rules | **$8,919 per 10,000** [6,092, 12,534], 70% | |
+
+> These figures come from the **20,000-row synthetic sample** that ships with the code (test month: 3,362 payments, 108 fraud), so the pipeline can be run without the Kaggle download. With the IEEE-CIS files in `data/raw/`, `uv run fraudguard all --force` rebuilds everything and the same tables, the landing page and `reports/` show the real figures.
+
+Also: calibrated probabilities (expected calibration error 0.003), scoring in about 5 ms inside the API, and a replay of later months in which drift was detected weekly and two retrained challengers were tested fairly and rejected (week 8).
 
 ## Stack
 
@@ -18,6 +33,22 @@ Built on the [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-dete
 Everything runs locally. There is no Docker and no GPU.
 
 ## Quick start
+
+One command rebuilds everything on a fresh clone. It needs [uv](https://docs.astral.sh/uv/), Node.js 22 and a local MongoDB; there is no Docker.
+
+```bash
+uv run fraudguard all --synthetic --web
+```
+
+This builds the data (synthetic if the Kaggle files are missing), features, reports and the tuned, calibrated model, then evaluates it, sets up MongoDB and builds the web app. Then:
+
+```bash
+uv run fraudguard db add-user <you> --role admin   # choose your own password at the prompt
+uv run fraudguard serve                            # API on :8000
+npm --prefix web run start                         # web app on :3000
+```
+
+The stages can also be run one at a time:
 
 ```bash
 uv sync                               # installs Python 3.12 deps from uv.lock
@@ -307,7 +338,7 @@ The public page at `/` is always dark, because the 3D scenes glow and glow needs
 
 | Section | What the visitor sees | How it is built |
 |---|---|---|
-| **Hero** | A turning globe of payments. Most arcs pulse blue end to end; a few flash red and stop where a shield ring catches them. | React Three Fiber: shader points on a Fibonacci sphere, tube arcs with a travelling-pulse shader, a fresnel rim, bloom from `@react-three/postprocessing` |
+| **Hero** | A turning globe of payments. Most arcs pulse blue end to end; a few flash red and stop where a shield ring catches them. | React Three Fiber: shader points on a Fibonacci sphere, tube arcs with a travelling-pulse shader, a fresnel rim, bloom from `@react-three/postprocessing`. Phones get the same globe as an SVG animated with CSS (see below) |
 | **How it works** | Data, features, model, decision, revealed one after another | Framer Motion, staggered. The decision card quotes the live cost policy |
 | **Entity graph** | Cards, devices and emails. Scrolling lights a confirmed fraud card, then what it used (one hop), then the cards sharing those (two hops), while the camera moves in | drei `Float` and `Line`. GSAP ScrollTrigger scrubs the progress, and the steps beside the scene follow it |
 | **Live demo** | A payment form with presets. A 3D needle swings to the score on a log scale, then the decision and the top three reasons slide in | Real scoring through `POST /api/demo/score` (below) |
@@ -326,10 +357,62 @@ The plan said the demo would call the real `/score`. That endpoint records the p
 **Reason codes.** Features that read the same are now one reason (for example `TransactionAmt` and `amt_log` both say "amount of $849.00"), with their contributions added. This affects the API, the console and the evaluation report.
 
 **Performance and accessibility.**
-- The page's own JavaScript is about 170 kB. three.js and the scenes load with `next/dynamic` (`ssr: false`) once the browser is idle, so the text paints first.
-- Until then, and for good if WebGL is missing or the visitor prefers reduced motion, static SVG versions of the globe, graph and gauge are shown. With reduced motion, the graph section becomes a plain list and the counters show their final values.
+- SVG versions of the globe, graph and gauge paint first, so the text never waits for three.js.
+- Each 3D scene loads with `next/dynamic` (`ssr: false`) only when the browser is idle and the scene is within a screen of the viewport. WebGL support is checked at that point too, because creating a test context is itself slow.
+- **Phones and low-power machines keep the SVG globe**, animated with CSS on its own compositing layer. Starting three.js there blocked the main thread for seconds (measured below).
+- Without WebGL the SVG versions stay. With reduced motion everything is still, the graph section becomes a plain list and the counters show their final values.
 - The device pixel ratio is capped at 2, and each canvas stops rendering frames when it is off screen.
-- The frame-rate and Lighthouse targets from the plan have not been measured yet. That is part of week 10.
+
+Measured in Chrome on this project's laptop (Intel Iris Xe), production build, median of three runs:
+
+| | First paint | Largest paint | Layout shift | Blocking time | Frame rate |
+|---|---:|---:|---:|---:|---:|
+| Desktop, 1440×900 | 0.25 s | 0.25 s | 0 | 0.25 s | **60 fps** (globe) |
+| Phone, 4× slower CPU, fast 4G | 0.9 s | 1.8 s | 0 | 2.6 s | — |
+
+Desktop meets the plan's targets. On a throttled phone, most of the remaining blocking time is evaluating the page's React and animation code and the first layout. The official Lighthouse score was not run here; to check it, open the page in Chrome, then DevTools → Lighthouse.
+
+## Week 10: cost explorer, settings, end-to-end tests
+
+**Cost explorer** (admin, `/console/cost`):
+- Four sliders: false-decline cost, review cost, reviews per day and the risk multiplier.
+- For each setting, `POST /api/v1/policy/simulate` replays the **validation month**, scored once by the serving model and cached per version, through the decision layer. It returns the cost per 10,000 payments, the fraud stopped, and the decline and review rates, each next to the current policy.
+- It also returns the cost curve as the false-decline cost moves from $5 to $100, and the probability **thresholds the policy implies** at nine amounts. A unit test checks these thresholds against the live decision function.
+- Nothing changes until **Apply this policy**, which is audited.
+
+**Settings** (admin, `/console/settings`):
+- **Users:** add users, change roles, deactivate, set passwords. The API refuses to remove the last active admin, or your own admin access.
+- **API keys:** create keys with scopes (`score`, `labels`, `promote`, `demo`). A key is shown once and only its hash is stored. Keys can be revoked.
+- **Audit log:** paged, newest first. No passwords or hashes are ever written to it.
+
+**Console polish.**
+- **Theme:** a light/dark/system switch, remembered in the browser and applied before the first paint.
+- **Overview:** a drift badge for the latest weekly check.
+- **Favicon:** the app has one now.
+
+**End-to-end tests** (Playwright, 10 tests):
+
+```bash
+cd web && npm run e2e
+```
+
+`e2e/run.mjs` does the following:
+1. Creates a throwaway MongoDB database, with users whose passwords are generated for the run.
+2. Starts the real API and the production web build, and scores 400 test-month payments.
+3. Runs the tests in your installed Google Chrome (no browser download).
+4. Stops both servers and drops the database.
+
+The tests cover:
+- The landing page on desktop (WebGL globe) and phone (SVG globe), the live demo, no horizontal scroll, and no console errors.
+- The reduced-motion fallback.
+- Cross-site posts to the demo, which are refused.
+- Sign-in and roles, an analyst closing a case, the cost explorer, and settings.
+
+**Security.**
+- Next.js is upgraded to 15.5.29, which fixes advisories in 15.5.4, including a middleware bypass that matters here because middleware guards the console.
+- `postcss` and `sharp` are pinned to patched versions through npm `overrides`. `npm audit --omit=dev` reports no vulnerabilities.
+
+**Demo.** [docs/demo.md](docs/demo.md) is a four-minute script for recording the walkthrough video.
 
 ## Development
 
@@ -340,4 +423,5 @@ uv run ruff format .     # format
 uv run mypy              # type-check (strict)
 uv run pre-commit install
 cd web && npm run lint && npm run typecheck && npm test && npm run build
+cd web && npm run e2e     # end-to-end (MongoDB running, model trained)
 ```

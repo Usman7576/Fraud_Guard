@@ -7,22 +7,31 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
+from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
 from mlflow import MlflowClient
 from pydantic import BaseModel, Field
 from pymongo import ReturnDocument, UpdateOne
-from pymongo.errors import BulkWriteError
+from pymongo.errors import BulkWriteError, DuplicateKeyError
 
 from fraudguard.api import db as dbm
 from fraudguard.api.app import Admin, Analyst, ApiClient, DemoClient, LabelFeed, Operator, State
 from fraudguard.api.schemas import (
+    ApiKeyCreate,
+    ApiKeyCreated,
+    ApiKeyOut,
+    AuditEntry,
+    AuditPage,
     BatchRequest,
     BatchResponse,
     CaseDetail,
     CasePage,
     CaseSummary,
     CaseUpdate,
+    CostOut,
+    CurvePointOut,
     DemoResponse,
     DemoTransaction,
     DriftDetail,
@@ -41,12 +50,18 @@ from fraudguard.api.schemas import (
     RefreshRequest,
     RetrainingEvent,
     ScoreResponse,
+    SimulateResponse,
+    ThresholdOut,
     TokenResponse,
     Transaction,
+    UserCreate,
+    UserOut,
+    UserUpdate,
 )
 from fraudguard.api.scoring import ScoreResult
-from fraudguard.api.security import DUMMY_HASH, verify_password
+from fraudguard.api.security import DUMMY_HASH, hash_password, new_api_key, verify_password
 from fraudguard.data.load import SECONDS_PER_DAY
+from fraudguard.decision import explorer
 from fraudguard.decision.policy import Action, Policy
 from fraudguard.features.online import OutOfOrderError
 from fraudguard.log import get_logger
@@ -250,6 +265,148 @@ async def demo_score(txn: DemoTransaction, state: State, key: DemoClient) -> Dem
     return DemoResponse(**r.model_dump(include=set(DemoResponse.model_fields)))
 
 
+# Admin: users, API keys and the audit log ---------------------------------------------------
+
+
+def _user(doc: dict[str, Any]) -> UserOut:
+    return UserOut(
+        username=doc["username"], role=doc["role"], active=doc["active"], created_at=doc.get("created_at")
+    )
+
+
+@admin.get("/users")
+async def list_users(state: State, _: Admin) -> list[UserOut]:
+    return [_user(d) async for d in state.db.users.find().sort("username", 1)]
+
+
+@admin.post("/users", status_code=status.HTTP_201_CREATED)
+async def create_user(body: UserCreate, state: State, admin_user: Admin) -> UserOut:
+    doc = {
+        "username": body.username,
+        "password_hash": hash_password(body.password),
+        "role": body.role,
+        "active": True,
+        "created_at": dbm.now(),
+    }
+    try:
+        await state.db.users.insert_one(doc)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"user {body.username!r} already exists") from exc
+    await dbm.audit(
+        state.db, admin_user["username"], "user.create", f"user:{body.username}", after={"role": body.role}
+    )
+    return _user(doc)
+
+
+@admin.patch("/users/{username}")
+async def update_user(username: str, body: UserUpdate, state: State, admin_user: Admin) -> UserOut:
+    """Change a user's role, (de)activate them or set a new password. One active admin always stays."""
+    doc = await state.db.users.find_one({"username": username})
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no user {username!r}")
+    changes: dict[str, Any] = body.model_dump(exclude_none=True, exclude={"password"})
+    loses_admin = (
+        doc["role"] == "admin"
+        and doc["active"]
+        and (changes.get("role", "admin") != "admin" or changes.get("active", True) is False)
+    )
+    if loses_admin:
+        if username == admin_user["username"]:
+            raise HTTPException(status.HTTP_409_CONFLICT, "you cannot remove your own admin access")
+        if await state.db.users.count_documents({"role": "admin", "active": True}) <= 1:
+            raise HTTPException(status.HTTP_409_CONFLICT, "keep at least one active admin")
+    update = dict(changes)
+    if body.password is not None:
+        update["password_hash"] = hash_password(body.password)
+    if not update:
+        return _user(doc)
+    await state.db.users.update_one({"username": username}, {"$set": update})
+    before = {k: doc.get(k) for k in changes}
+    after = changes | ({"password": "changed"} if body.password is not None else {})
+    await dbm.audit(
+        state.db, admin_user["username"], "user.update", f"user:{username}", before=before, after=after
+    )
+    return _user(doc | update)
+
+
+def _key(doc: dict[str, Any]) -> ApiKeyOut:
+    return ApiKeyOut(
+        id=str(doc["_id"]),
+        name=doc["name"],
+        scopes=list(doc.get("scopes", ["score"])),
+        active=doc["active"],
+        created_at=doc.get("created_at"),
+    )
+
+
+@admin.get("/api-keys")
+async def list_api_keys(state: State, _: Admin) -> list[ApiKeyOut]:
+    """Every key with its scopes. Keys themselves are never shown again; only hashes are stored."""
+    return [_key(d) async for d in state.db.api_keys.find().sort([("active", -1), ("created_at", -1)])]
+
+
+@admin.post("/api-keys", status_code=status.HTTP_201_CREATED)
+async def create_api_key(body: ApiKeyCreate, state: State, admin_user: Admin) -> ApiKeyCreated:
+    key, key_hash = new_api_key()
+    scopes = sorted(set(body.scopes))
+    doc = {"name": body.name, "key_hash": key_hash, "active": True, "scopes": scopes, "created_at": dbm.now()}
+    result = await state.db.api_keys.insert_one(doc)
+    await dbm.audit(
+        state.db, admin_user["username"], "api_key.create", f"api_key:{body.name}", after={"scopes": scopes}
+    )
+    return ApiKeyCreated(**_key(doc | {"_id": result.inserted_id}).model_dump(), key=key)
+
+
+@admin.post("/api-keys/{key_id}/revoke")
+async def revoke_api_key(key_id: str, state: State, admin_user: Admin) -> ApiKeyOut:
+    try:
+        oid = ObjectId(key_id)
+    except InvalidId as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such API key") from exc
+    doc = await state.db.api_keys.find_one_and_update(
+        {"_id": oid}, {"$set": {"active": False}}, return_document=ReturnDocument.AFTER
+    )
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such API key")
+    await dbm.audit(
+        state.db, admin_user["username"], "api_key.revoke", f"api_key:{doc['name']}", after={"active": False}
+    )
+    return _key(doc)
+
+
+@admin.get("/audit")
+async def audit_log(
+    state: State,
+    _: Admin,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    before: datetime | None = None,
+    actor: str | None = None,
+    action: str | None = None,
+) -> AuditPage:
+    """Who changed what, newest first. Page backwards with `before`."""
+    query: dict[str, Any] = {}
+    if before is not None:
+        query["ts"] = {"$lt": before}
+    if actor:
+        query["actor"] = actor
+    if action:
+        query["action"] = action
+    docs = await state.db.audit_log.find(query).sort("ts", -1).limit(limit + 1).to_list()
+    entries = [
+        AuditEntry(
+            id=str(d["_id"]),
+            actor=d["actor"],
+            action=d["action"],
+            target=d.get("target"),
+            before=d.get("before"),
+            after=d.get("after"),
+            ts=d["ts"],
+        )
+        for d in docs[:limit]
+    ]
+    return AuditPage(entries=entries, next_before=entries[-1].ts if len(docs) > limit else None)
+
+
 # Cases ----------------------------------------------------------------------------------------
 
 
@@ -444,6 +601,50 @@ async def put_policy(body: PolicyModel, state: State, user: Admin) -> PolicyMode
         state.db, user["username"], "policy.update", "policy", before=before, after=body.model_dump()
     )
     return body
+
+
+async def _validation_scores(state: State) -> explorer.Scored:
+    """The validation month scored by the serving model; computed once per model version."""
+    async with state.explorer_lock:
+        cached = state.explorer_scores
+        if cached is None or cached[0] != state.scorer.version:
+            try:
+                scored = await asyncio.to_thread(
+                    explorer.score_validation, state.data_cfg, state.scorer.model
+                )
+            except (OSError, ValueError) as exc:
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE, f"validation month unavailable: {exc}"
+                ) from exc
+            state.explorer_scores = cached = (state.scorer.version, scored)
+        return cached[1]
+
+
+@admin.post("/policy/simulate")
+async def simulate_policy(body: PolicyModel, state: State, _: Admin) -> SimulateResponse:
+    """What a proposed policy would have cost on the validation month, next to the current one.
+
+    Nothing changes: apply a policy with PUT /policy."""
+    scored = await _validation_scores(state)
+    proposed, current = Policy(**body.model_dump()), state.scorer.policy
+
+    def run() -> tuple[CostOut, CostOut, list[CurvePointOut]]:
+        return (
+            CostOut(**explorer.simulate(scored, proposed).as_dict()),
+            CostOut(**explorer.simulate(scored, current).as_dict()),
+            [CurvePointOut(**vars(c)) for c in explorer.false_decline_curve(scored, proposed)],
+        )
+
+    proposed_cost, current_cost, curve = await asyncio.to_thread(run)
+    return SimulateResponse(
+        model_version=state.scorer.version,
+        n_rows=int(scored.y.size),
+        n_fraud=scored.n_fraud,
+        proposed=proposed_cost,
+        current=current_cost,
+        curve=curve,
+        thresholds=[ThresholdOut(**vars(t)) for t in explorer.implied_thresholds(proposed)],
+    )
 
 
 def _versions(tracking_uri: str, serving: str) -> list[ModelVersion]:

@@ -125,8 +125,23 @@ def run_all(
     force: Annotated[bool, typer.Option(help="Rebuild every stage.")] = False,
     config: ConfigOpt = None,
     trials: Annotated[int | None, typer.Option(help="Override the number of Optuna trials.")] = None,
+    synthetic_data: Annotated[
+        bool,
+        typer.Option(
+            "--synthetic", help="Generate synthetic data first if the IEEE-CIS files are not in data/raw."
+        ),
+    ] = False,
+    web: Annotated[
+        bool, typer.Option(help="Also install and build the web app (needs Node.js and npm).")
+    ] = False,
 ) -> None:
-    """Rebuild everything. Stages are added here as they are built (train, evaluate, ...)."""
+    """Rebuild everything from the raw files: data, features, reports, model, evaluation, database.
+
+    On a fresh clone: `uv run fraudguard all --synthetic --web`."""
+    cfg = load_data_config(config)
+    if synthetic_data and not (cfg.paths.raw_dir / cfg.raw_files.transactions).exists():
+        console.print("[yellow]No IEEE-CIS files in data/raw:[/] generating synthetic data.")
+        data_synth(rows=20_000, out=None, force=False, config=config)
     data_build(force=force, config=config)
     features_build(force=force, config=config, features_config=None)
     report_adversarial(config=config, features_config=None, out=PROJECT_ROOT / "reports")
@@ -134,6 +149,33 @@ def run_all(
     train_lightgbm(config=config, model_config=None, out=PROJECT_ROOT / "reports", trials=trials)
     report_ablation(config=config, model_config=None, features_config=None, out=PROJECT_ROOT / "reports")
     evaluate(config=config, model_config=None, out=PROJECT_ROOT / "reports")
+    try:
+        db_init()
+    except Exception as exc:
+        console.print(
+            f"[yellow]Skipped the database setup ({exc}).[/] Start MongoDB, then run `fraudguard db init`."
+        )
+    if web:
+        _build_web()
+    console.print(
+        "[green]Done.[/] Next: `fraudguard db add-user <name> --role admin`, then `fraudguard serve`."
+    )
+
+
+def _build_web() -> None:
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    npm = shutil.which("npm")
+    if npm is None:
+        console.print(
+            "[red]npm not found:[/] install Node.js 22, then run `npm ci && npm run build` in web/."
+        )
+        raise typer.Exit(1)
+    for args in (["ci"], ["run", "build"]):
+        console.print(f"[bold]npm {' '.join(args)}[/] (web/)")
+        if subprocess.run([npm, *args], cwd=PROJECT_ROOT / "web", check=False).returncode != 0:
+            raise typer.Exit(1)
 
 
 ModelConfigOpt = Annotated[Path | None, typer.Option("--model-config", help="Path to a model config YAML.")]

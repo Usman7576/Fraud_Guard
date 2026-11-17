@@ -11,6 +11,15 @@ const ALLOWED: [method: string, pattern: RegExp][] = [
   ["GET", /^monitoring\/drift\/\d+\/report$/],
   // Admin-only on the API side; the proxy only forwards the person's own token.
   ["POST", /^models\/\d+\/promote$/],
+  ["POST", /^policy\/simulate$/],
+  ["PUT", /^policy$/],
+  ["GET", /^users$/],
+  ["POST", /^users$/],
+  ["PATCH", /^users\/[a-z0-9][a-z0-9_.-]{2,31}$/],
+  ["GET", /^api-keys$/],
+  ["POST", /^api-keys$/],
+  ["POST", /^api-keys\/[0-9a-f]{24}\/revoke$/],
+  ["GET", /^audit$/],
 ];
 
 /** Only the endpoints the console uses are reachable through the proxy. */

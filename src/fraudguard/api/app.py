@@ -11,6 +11,7 @@ Startup:
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from collections import defaultdict, deque
@@ -41,6 +42,7 @@ from fraudguard.config import (
 )
 from fraudguard.data import pipeline as data_pipeline
 from fraudguard.data import snapshot
+from fraudguard.decision.explorer import Scored
 from fraudguard.decision.policy import Policy
 from fraudguard.features.online import OnlineFeatureStore
 from fraudguard.log import get_logger
@@ -82,6 +84,9 @@ class AppState:
     limiter: RateLimiter
     demo_limiter: RateLimiter
     started_at: float = field(default_factory=time.time)
+    # Cost explorer: the validation month scored by the serving model, keyed by its version.
+    explorer_scores: tuple[str, Scored] | None = None
+    explorer_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 async def _warm(

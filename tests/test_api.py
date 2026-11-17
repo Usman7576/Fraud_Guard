@@ -263,6 +263,77 @@ def test_policy_and_models_are_admin_only_and_audited(env: Env) -> None:
     assert db.audit_log.count_documents({"action": {"$in": ["policy.update", "model.promote"]}}) == 2
 
 
+def test_cost_explorer_simulates_without_changing_the_policy(env: Env) -> None:
+    analyst, admin = env.token("ana"), env.token("root")
+    policy = env.client.get(f"{API}/policy", headers=admin).json()
+    assert env.client.post(f"{API}/policy/simulate", json=policy, headers=analyst).status_code == 403
+    r = env.client.post(f"{API}/policy/simulate", json=policy, headers=admin)
+    assert r.status_code == 200, r.text
+    same = r.json()
+    assert same["proposed"] == same["current"] and same["split"] == "validation"
+    assert same["n_rows"] > 0 and len(same["curve"]) == 20 and len(same["thresholds"]) == 9
+    act = [t["act_from"] for t in same["thresholds"]]
+    assert act == sorted(act, reverse=True)  # bigger payments are acted on at lower risk
+
+    pricey = env.client.post(
+        f"{API}/policy/simulate", json={**policy, "false_decline_cost": 90.0}, headers=admin
+    ).json()
+    assert pricey["proposed"]["decline_rate"] <= same["proposed"]["decline_rate"]
+    assert env.client.get(f"{API}/policy", headers=admin).json() == policy  # nothing applied
+
+
+def test_admin_manages_users_keys_and_reads_the_audit_log(env: Env) -> None:
+    analyst, admin = env.token("ana"), env.token("root")
+    assert env.client.get(f"{API}/users", headers=analyst).status_code == 403
+    new_user = {"username": "bea", "role": "analyst", "password": "bea-password-1"}
+    assert (
+        env.client.post(f"{API}/users", json={**new_user, "password": "short"}, headers=admin).status_code
+        == 422
+    )
+    assert env.client.post(f"{API}/users", json=new_user, headers=admin).status_code == 201
+    assert env.client.post(f"{API}/users", json=new_user, headers=admin).status_code == 409
+    login = {"username": "bea", "password": "bea-password-1"}
+    assert env.client.post(f"{API}/auth/login", json=login).status_code == 200
+
+    # Deactivated users cannot sign in; the last admin cannot be removed.
+    assert (
+        env.client.patch(f"{API}/users/bea", json={"active": False}, headers=admin).json()["active"] is False
+    )
+    assert env.client.post(f"{API}/auth/login", json=login).status_code == 401
+    assert env.client.patch(f"{API}/users/root", json={"role": "analyst"}, headers=admin).status_code == 409
+    assert env.client.patch(f"{API}/users/nobody", json={"active": True}, headers=admin).status_code == 404
+    users = {u["username"]: u for u in env.client.get(f"{API}/users", headers=admin).json()}
+    assert users["bea"]["active"] is False and "password_hash" not in users["bea"]
+
+    created = env.client.post(
+        f"{API}/api-keys", json={"name": "pos-terminal", "scopes": ["score"]}, headers=admin
+    )
+    assert created.status_code == 201
+    key = created.json()
+    txn = {"TransactionID": 9_900_001, "TransactionDT": 10**9, "TransactionAmt": 12.0}
+    assert env.client.post(f"{API}/score", json=txn, headers={"X-API-Key": key["key"]}).status_code == 200
+    listed = env.client.get(f"{API}/api-keys", headers=admin).json()
+    assert all("key" not in k and "key_hash" not in k for k in listed)
+    revoked = env.client.post(f"{API}/api-keys/{key['id']}/revoke", headers=admin)
+    assert revoked.json()["active"] is False
+    assert env.client.post(f"{API}/score", json=txn, headers={"X-API-Key": key["key"]}).status_code == 401
+    assert env.client.post(f"{API}/api-keys/not-an-id/revoke", headers=admin).status_code == 404
+
+    page = env.client.get(f"{API}/audit", params={"limit": 2}, headers=admin).json()
+    assert [e["action"] for e in page["entries"]] == ["api_key.revoke", "api_key.create"]
+    older = env.client.get(
+        f"{API}/audit", params={"limit": 2, "before": page["next_before"]}, headers=admin
+    ).json()
+    assert older["entries"][0]["action"] == "user.update"
+    actions = {
+        e["action"]
+        for e in env.client.get(f"{API}/audit", params={"actor": "root"}, headers=admin).json()["entries"]
+    }
+    assert {"user.create", "user.update", "api_key.create", "api_key.revoke"} <= actions
+    everything = env.client.get(f"{API}/audit", params={"limit": 200}, headers=admin).text
+    assert "argon2" not in everything and "bea-password-1" not in everything  # no secrets in the log
+
+
 def test_preview_changes_nothing(env: Env) -> None:
     analyst = env.token("ana")
     db = MongoClient(MONGO_URI)[env.settings.mongo_db]

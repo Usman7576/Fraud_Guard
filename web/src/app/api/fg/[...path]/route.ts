@@ -39,3 +39,4 @@ async function forward(req: NextRequest, { params }: Ctx): Promise<Response> {
 export const GET = forward;
 export const PATCH = forward;
 export const POST = forward;
+export const PUT = forward;

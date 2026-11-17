@@ -67,7 +67,12 @@ describe("proxy", () => {
     expect(isAllowed("GET", "cases")).toBe(true);
     expect(isAllowed("PATCH", "cases/123")).toBe(true);
     expect(isAllowed("POST", "score/preview")).toBe(true);
-    expect(isAllowed("PUT", "policy")).toBe(false); // admin settings are not exposed here
+    expect(isAllowed("PUT", "policy")).toBe(true); // the API itself requires the admin role
+    expect(isAllowed("PATCH", "users/bea")).toBe(true);
+    expect(isAllowed("PATCH", "users/../policy")).toBe(false);
+    expect(isAllowed("POST", "api-keys/0123456789abcdef01234567/revoke")).toBe(true);
+    expect(isAllowed("POST", "api-keys/x/revoke")).toBe(false);
+    expect(isAllowed("DELETE", "users/bea")).toBe(false);
     expect(isAllowed("POST", "models/3/promote")).toBe(true); // the API itself requires the admin role
     expect(isAllowed("POST", "ops/models/3/promote")).toBe(false); // machine-key route never via the browser
     expect(isAllowed("POST", "labels")).toBe(false);
